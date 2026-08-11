@@ -1,0 +1,10 @@
+{
+  "name": "Pilot — Gestion pour indépendants",
+  "short_name": "Pilot",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#101216",
+  "description": "Devis, factures et suivi pour indépendants belges.",
+  "icons": []
+}
