@@ -1,0 +1,14 @@
+{
+  "name": "pilot-belgium",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pilot — gestion commerciale pour indépendants belges",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
