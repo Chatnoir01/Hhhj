@@ -125,11 +125,18 @@ class CampaignEngine:
                 campaign.status = CampaignStatus.READY.value
             db.commit()
 
+        stats = campaign_stats(db, campaign.id)
         return {
             "ok": True,
             "live": effective_live,
             "processed": processed,
+            "empty_queue": processed == 0,
+            "detail": (
+                "No processable members in this campaign. Check the campaign ID and import stats."
+                if processed == 0 and not stats
+                else None
+            ),
             "preflight": asdict(preflight),
             "campaign_status": campaign.status,
-            "stats": campaign_stats(db, campaign.id),
+            "stats": stats,
         }
