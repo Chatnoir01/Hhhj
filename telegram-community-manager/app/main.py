@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
 
 from .campaign_engine import CampaignEngine
+from .dashboard import dashboard_response
 from .config import Settings, get_settings
 from .db import get_db, init_db
 from .importers import _dedupe, load_usernames
@@ -33,9 +34,14 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="Telegram Community Manager",
-    version="0.5.0",
+    version="0.6.0",
     lifespan=lifespan,
 )
+
+
+@app.get("/", include_in_schema=False)
+def dashboard():
+    return dashboard_response()
 
 
 def _campaign_or_404(db: Session, campaign_id: int):
