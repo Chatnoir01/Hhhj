@@ -37,6 +37,41 @@ def add_usernames(db: Session, campaign: Campaign, usernames: list[str]) -> int:
     return added
 
 
+def add_member_mappings(db: Session, campaign: Campaign, members) -> dict[str, int]:
+    existing_usernames = set(
+        db.scalars(
+            select(CampaignMember.username).where(CampaignMember.campaign_id == campaign.id)
+        ).all()
+    )
+    added = 0
+    id_only = 0
+    aliases = 0
+    for item in members:
+        if not item.username:
+            # Keep ID-only records out of the invite queue: Telegram MTProto cannot
+            # safely address a bare ID without an access_hash/entity.
+            id_only += 1
+            continue
+        if item.username in existing_usernames:
+            continue
+        db.add(
+            CampaignMember(
+                campaign_id=campaign.id,
+                username=item.username,
+                telegram_user_id=item.telegram_user_id,
+                detail=item.detail,
+            )
+        )
+        existing_usernames.add(item.username)
+        added += 1
+        if item.telegram_user_id is not None:
+            aliases += 1
+    if added:
+        campaign.status = CampaignStatus.READY.value
+    db.commit()
+    return {"added": added, "with_telegram_id": aliases, "id_only_skipped": id_only}
+
+
 def pending_members(db: Session, campaign_id: int, limit: int) -> list[CampaignMember]:
     now = datetime.now(timezone.utc)
     immediately_resumable = (
