@@ -1,11 +1,13 @@
 import os
 from pathlib import Path
 
-from fastapi.testclient import TestClient
+import pytest
+from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
 
-from app.config import Settings, get_settings
-from app.main import app
-from app.security import harden_session_file, redact_sensitive, secure_session_path
+from app.config import Settings
+from app.main import app, health
+from app.security import harden_session_file, redact_sensitive, require_admin, secure_session_path
 
 
 def test_dry_run_is_safe_by_default():
@@ -23,48 +25,49 @@ def test_redacts_otp_and_named_secrets():
     assert redacted.count("[REDACTED]") >= 4
 
 
-def test_config_status_requires_admin(monkeypatch):
-    monkeypatch.setenv("ADMIN_API_KEY", "x" * 40)
-    get_settings.cache_clear()
-    client = TestClient(app)
+def test_admin_guard_rejects_missing_and_wrong_credentials():
+    settings = Settings(_env_file=None, admin_api_key="x" * 40)
 
-    assert client.get("/config/status").status_code == 401
-    assert client.get(
-        "/config/status",
-        headers={"Authorization": "Bearer wrong"},
-    ).status_code == 401
+    with pytest.raises(HTTPException) as missing:
+        require_admin(credentials=None, settings=settings)
+    assert missing.value.status_code == 401
 
-    response = client.get(
-        "/config/status",
-        headers={"Authorization": f"Bearer {'x' * 40}"},
-    )
-    assert response.status_code == 200
-    get_settings.cache_clear()
+    wrong = HTTPAuthorizationCredentials(scheme="Bearer", credentials="wrong")
+    with pytest.raises(HTTPException) as invalid:
+        require_admin(credentials=wrong, settings=settings)
+    assert invalid.value.status_code == 401
+
+
+def test_admin_guard_accepts_correct_bearer():
+    token = "x" * 40
+    settings = Settings(_env_file=None, admin_api_key=token)
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
+
+    assert require_admin(credentials=credentials, settings=settings) is None
 
 
 def test_health_never_exposes_secret_values(monkeypatch):
     monkeypatch.setenv("TELEGRAM_API_HASH", "super-secret-api-hash")
     monkeypatch.setenv("TELEGRAM_PHONE", "+32000000000")
     monkeypatch.setenv("ADMIN_API_KEY", "y" * 40)
-    get_settings.cache_clear()
 
-    body = TestClient(app).get("/health").text
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    body = repr(health())
 
     assert "super-secret-api-hash" not in body
     assert "+32000000000" not in body
     assert "y" * 40 not in body
+
     get_settings.cache_clear()
 
 
 def test_session_name_cannot_escape_directory(tmp_path):
     settings = Settings(_env_file=None, session_dir=tmp_path)
 
-    try:
+    with pytest.raises(ValueError):
         secure_session_path(settings, "../escape")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("path traversal session name was accepted")
 
 
 def test_session_permissions_are_private_on_posix(tmp_path):
@@ -101,7 +104,7 @@ def test_no_permissive_cors_middleware():
 def test_redacting_filter_scrubs_log_output(capfd):
     from app.logging_config import get_logger
 
-    logger = get_logger("security-test")
+    logger = get_logger("security-test-2")
     logger.warning("code=123456 password=secret api_hash=abcdef")
     captured = capfd.readouterr()
 
