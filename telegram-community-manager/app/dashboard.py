@@ -50,6 +50,13 @@ DASHBOARD_HTML = r"""<!doctype html>
 
   <div id="panel" class="hidden">
     <section class="card">
+      <h2>Lien public GitHub</h2>
+      <p class="muted">Le panel peut rendre lui-même le port 8000 public depuis ce Codespace.</p>
+      <button onclick="publishGitHub()">Publier / réactiver le lien public</button>
+      <div id="publicUrl" class="status warn">Lien public pas encore activé</div>
+    </section>
+
+    <section class="card">
       <h2>2. Connexion Telegram</h2>
       <div id="tgStatus" class="status warn">Statut à vérifier</div>
       <button class="secondary" onclick="refreshTelegramStatus()">Vérifier la session</button>
@@ -134,6 +141,7 @@ async function boot(){
         await request("/config/status");
         show("panel",true); show("loginCard",false); show("setupCard",false);
         await refreshTelegramStatus();
+        try{await publishGitHub()}catch(e){}
         return;
       }catch(e){setToken("")}
     }
@@ -156,6 +164,7 @@ async function initializeSetup(){
   document.getElementById("botToken").value="";
   show("setupCard",false); show("loginCard",false); show("panel",true);
   await refreshTelegramStatus();
+  try{await publishGitHub()}catch(e){}
 }
 
 async function login(){
@@ -164,11 +173,26 @@ async function login(){
   document.getElementById("loginPassword").value="";
   show("loginCard",false); show("panel",true);
   await refreshTelegramStatus();
+  try{await publishGitHub()}catch(e){}
 }
 
 async function logout(){
   try{await request("/auth/logout","POST",{})}catch(e){}
   setToken(""); show("panel",false); show("loginCard",true);
+}
+
+async function publishGitHub(){
+  const d=await request("/github/publish","POST",{});
+  const el=document.getElementById("publicUrl");
+  if(d.url){
+    el.textContent=d.url;
+    el.className="status ok";
+    el.onclick=()=>window.open(d.url,"_blank");
+  }else{
+    el.textContent="Port public activé";
+    el.className="status ok";
+  }
+  return d;
 }
 
 async function refreshTelegramStatus(){
