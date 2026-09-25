@@ -72,6 +72,23 @@ def add_member_mappings(db: Session, campaign: Campaign, members) -> dict[str, i
     return {"added": added, "with_telegram_id": aliases, "id_only_skipped": id_only}
 
 
+def duplicate_telegram_identity(
+    db: Session, campaign_id: int, member_id: int, telegram_user_id: int
+) -> CampaignMember | None:
+    stmt = (
+        select(CampaignMember)
+        .where(
+            CampaignMember.campaign_id == campaign_id,
+            CampaignMember.id != member_id,
+            CampaignMember.telegram_user_id == telegram_user_id,
+            CampaignMember.status != MemberStatus.INVALID.value,
+        )
+        .order_by(CampaignMember.id.asc())
+        .limit(1)
+    )
+    return db.scalar(stmt)
+
+
 def pending_members(db: Session, campaign_id: int, limit: int) -> list[CampaignMember]:
     now = datetime.now(timezone.utc)
     immediately_resumable = (
