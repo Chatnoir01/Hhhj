@@ -13,10 +13,13 @@ class Settings(BaseSettings):
     target_group: str | None = None
     admin_telegram_id: int | None = None
     admin_api_key: str | None = None
+
     dry_run: bool = True
     database_url: str = "sqlite:///data/telegram.db"
     session_dir: Path = Path("data/sessions")
     bind_host: str = "127.0.0.1"
+    max_upload_bytes: int = 5 * 1024 * 1024
+    max_batch_size: int = 100
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -37,7 +40,6 @@ class Settings(BaseSettings):
             "TELEGRAM_API_ID": self.telegram_api_id,
             "TELEGRAM_API_HASH": self.telegram_api_hash,
             "TELEGRAM_PHONE": self.telegram_phone,
-            "TARGET_GROUP": self.target_group,
             "ADMIN_API_KEY": self.admin_api_key,
         }
         return [name for name, value in required.items() if value in (None, "")]
