@@ -70,6 +70,14 @@ def require_admin(
     )
 
 
+def get_admin_token(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    settings: Settings = Depends(get_settings),
+) -> str:
+    require_admin(credentials=credentials, settings=settings)
+    return credentials.credentials if credentials else ""
+
+
 def secure_session_path(settings: Settings, session_name: str = "telegram") -> Path:
     if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", session_name):
         raise ValueError("Invalid session name")
