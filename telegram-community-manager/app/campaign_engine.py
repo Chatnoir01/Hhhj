@@ -4,7 +4,12 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .models import Campaign, CampaignStatus, MemberStatus
-from .repository import campaign_stats, pending_members
+from .repository import (
+    campaign_stats,
+    has_flood_wait_members,
+    has_unfinished_members,
+    pending_members,
+)
 from .telegram_gateway import ResolvedUser
 
 
@@ -92,6 +97,7 @@ class CampaignEngine:
             if not effective_live:
                 member.status = MemberStatus.READY_DIRECT_INVITE.value
                 member.detail = "dry-run: eligible for a direct invite attempt"
+                member.retry_after = None
                 db.commit()
                 continue
 
@@ -109,8 +115,11 @@ class CampaignEngine:
                 break
 
         if not stopped_on_flood_wait:
-            remaining = pending_members(db, campaign.id, 1)
-            if effective_live and not remaining:
+            if has_flood_wait_members(db, campaign.id):
+                campaign.status = CampaignStatus.FLOOD_WAIT.value
+            elif has_unfinished_members(db, campaign.id):
+                campaign.status = CampaignStatus.READY.value
+            elif effective_live:
                 campaign.status = CampaignStatus.COMPLETED.value
             else:
                 campaign.status = CampaignStatus.READY.value
