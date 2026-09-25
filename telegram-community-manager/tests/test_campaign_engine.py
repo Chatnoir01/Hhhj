@@ -261,11 +261,15 @@ async def test_resolution_timeout_isolated_and_does_not_invite(db, monkeypatch):
     gateway = SlowGateway()
     settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
 
-    async def immediate_timeout(awaitable, timeout):
-        awaitable.close()
-        raise TimeoutError
+    real_wait_for = __import__("asyncio").wait_for
 
-    monkeypatch.setattr("app.campaign_engine.asyncio.wait_for", immediate_timeout)
+    async def timeout_resolution_only(awaitable, timeout):
+        if getattr(awaitable, "cr_code", None) and awaitable.cr_code.co_name == "resolve_username":
+            awaitable.close()
+            raise TimeoutError
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr("app.campaign_engine.asyncio.wait_for", timeout_resolution_only)
     result = await CampaignEngine(settings).run(db, campaign, gateway, requested_live=False, limit=25)
     member = db.scalar(select(CampaignMember))
     assert result["ok"] is True
