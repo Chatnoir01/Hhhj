@@ -241,3 +241,65 @@ async def test_duplicate_identity_keeps_first_member_as_canonical(db):
     }
     assert rows["alias_one"] == MemberStatus.READY_DIRECT_INVITE.value
     assert rows["alias_two"] == MemberStatus.DUPLICATE_ID.value
+
+
+class SlowGateway(FakeGateway):
+    async def resolve_username(self, username):
+        import asyncio
+        await asyncio.sleep(31)
+
+
+class ExplodingResolveGateway(FakeGateway):
+    async def resolve_username(self, username):
+        raise RuntimeError("temporary network failure")
+
+
+@pytest.mark.asyncio
+async def test_resolution_timeout_isolated_and_does_not_invite(db, monkeypatch):
+    campaign = create_campaign(db, "timeout", "@target")
+    add_usernames(db, campaign, ["ready_user"])
+    gateway = SlowGateway()
+    settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
+
+    async def immediate_timeout(awaitable, timeout):
+        awaitable.close()
+        raise TimeoutError
+
+    monkeypatch.setattr("app.campaign_engine.asyncio.wait_for", immediate_timeout)
+    result = await CampaignEngine(settings).run(db, campaign, gateway, requested_live=False, limit=25)
+    member = db.scalar(select(CampaignMember))
+    assert result["ok"] is True
+    assert member.status == MemberStatus.FAILED_TEMPORARY.value
+    assert gateway.invite_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_unexpected_resolution_failure_isolated(db):
+    campaign = create_campaign(db, "resolve-error", "@target")
+    add_usernames(db, campaign, ["ready_user"])
+    gateway = ExplodingResolveGateway()
+    settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
+    result = await CampaignEngine(settings).run(db, campaign, gateway, requested_live=False, limit=25)
+    member = db.scalar(select(CampaignMember))
+    assert result["ok"] is True
+    assert member.status == MemberStatus.FAILED_TEMPORARY.value
+    assert "RuntimeError" in member.detail
+    assert gateway.invite_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_fresh_members_are_processed_before_transient_retries(db):
+    campaign = create_campaign(db, "priority", "@target")
+    add_usernames(db, campaign, ["old_failure", "ready_user"])
+    rows = list(db.scalars(select(CampaignMember).order_by(CampaignMember.id)).all())
+    rows[0].status = MemberStatus.FAILED_TEMPORARY.value
+    db.commit()
+
+    gateway = FakeGateway()
+    settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
+    result = await CampaignEngine(settings).run(db, campaign, gateway, requested_live=False, limit=1)
+
+    rows = {row.username: row for row in db.scalars(select(CampaignMember)).all()}
+    assert result["processed"] == 1
+    assert rows["ready_user"].status == MemberStatus.READY_DIRECT_INVITE.value
+    assert rows["old_failure"].attempts == 0
