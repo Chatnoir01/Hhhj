@@ -11,3 +11,14 @@ reports/*.csv
 reports/*.json
 !reports/.gitkeep
 !data/.gitkeep
+
+# Local upstream checkout
+vendor/*
+!vendor/.gitkeep
+
+# Telegram runtime secrets/data
+*.session
+*.session-journal
+.env
+logs/
+data/
