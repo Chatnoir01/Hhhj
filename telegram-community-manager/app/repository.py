@@ -1,7 +1,7 @@
 from collections import Counter
 from datetime import datetime, timezone
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, case, or_, select
 from sqlalchemy.orm import Session
 
 from .models import Campaign, CampaignMember, CampaignStatus, MemberStatus
@@ -117,7 +117,16 @@ def pending_members(
                 ),
             ),
         )
-        .order_by(CampaignMember.id.asc())
+        .order_by(
+            case(
+                (CampaignMember.status == MemberStatus.IMPORTED.value, 0),
+                (CampaignMember.status == MemberStatus.RESOLVED.value, 1),
+                (CampaignMember.status == MemberStatus.READY_DIRECT_INVITE.value, 2),
+                (CampaignMember.status == MemberStatus.FAILED_TEMPORARY.value, 3),
+                else_=4,
+            ),
+            CampaignMember.id.asc(),
+        )
         .limit(limit)
     )
     return list(db.scalars(stmt).all())
