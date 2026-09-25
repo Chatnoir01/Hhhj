@@ -48,7 +48,12 @@ class CampaignEngine:
         processed = 0
         stopped_on_flood_wait = False
 
-        for member in pending_members(db, campaign.id, max(1, min(limit, 100))):
+        for member in pending_members(
+            db,
+            campaign.id,
+            max(1, min(limit, 100)),
+            include_ready_direct_invite=effective_live,
+        ):
             processed += 1
             member.attempts += 1
 
