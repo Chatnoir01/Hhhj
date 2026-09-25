@@ -35,12 +35,11 @@ def _b64d(value: str) -> bytes:
 
 
 def _derive(password: str, salt: bytes) -> bytes:
-    return hashlib.scrypt(
+    return hashlib.pbkdf2_hmac(
+        "sha256",
         password.encode("utf-8"),
-        salt=salt,
-        n=2**15,
-        r=8,
-        p=1,
+        salt,
+        600_000,
         dklen=32,
     )
 
