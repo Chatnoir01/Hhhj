@@ -207,7 +207,7 @@ def _serialize_campaign(db: Session, campaign) -> dict:
         "status": campaign.status,
         "live_enabled": campaign.live_enabled,
         "last_error": campaign.last_error,
-        "stats": campaign_stats(db, campaign.id),
+        "stats": campaign_stats(db, campaign.id),\n        "member_count": sum(campaign_stats(db, campaign.id).values()),
         "members": [
             {
                 "id": member.id,
@@ -244,6 +244,25 @@ def config_status(
         "bind_host": settings.bind_host,
         "max_upload_bytes": settings.max_upload_bytes,
         "max_batch_size": settings.max_batch_size,
+    }
+
+
+@app.get("/campaigns", dependencies=[Depends(require_admin)])
+def list_campaigns_route(db: Session = Depends(get_db)):
+    campaigns = list_campaigns(db)
+    return {
+        "ok": True,
+        "campaigns": [
+            {
+                "id": campaign.id,
+                "name": campaign.name,
+                "target_group": campaign.target_group,
+                "status": campaign.status,
+                "stats": campaign_stats(db, campaign.id),
+                "member_count": sum(campaign_stats(db, campaign.id).values()),
+            }
+            for campaign in campaigns
+        ],
     }
 
 
