@@ -122,7 +122,7 @@ class TelegramService:
         if self.client is None:
             raise TelegramAuthError("not_connected")
 
-        normalized = username.strip().lstrip("@")
+        normalized = username.strip().lstrip("@").lower()
         if not normalized:
             raise ValueError("username_required")
 
