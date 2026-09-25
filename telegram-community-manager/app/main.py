@@ -11,6 +11,7 @@ from .config import Settings, get_settings
 from .db import get_db, init_db
 from .importers import _dedupe, load_usernames
 from .logging_config import get_logger
+from .github_publish import public_codespace_url, publish_codespace_port
 from .models import CampaignStatus, MemberStatus
 from .repository import (
     add_usernames,
@@ -113,6 +114,22 @@ def admin_login(payload: LoginRequest):
 def admin_logout(token: str = Depends(get_admin_token)):
     runtime_logout(token)
     return {"ok": True}
+
+
+@app.get("/github/public-url", dependencies=[Depends(require_admin)])
+def github_public_url():
+    return {
+        "ok": True,
+        "url": public_codespace_url(8000),
+    }
+
+
+@app.post("/github/publish", dependencies=[Depends(require_admin)])
+def github_publish():
+    result = publish_codespace_port(8000)
+    if not result.get("ok"):
+        raise HTTPException(status_code=409, detail=result.get("detail"))
+    return result
 
 
 @app.get("/telegram/auth/status")
