@@ -70,6 +70,15 @@ class CampaignEngine:
                 member.status = MemberStatus.RESOLVED.value
                 member.detail = None
 
+                duplicate = duplicate_telegram_identity(
+                    db, campaign.id, member.id, resolved.user_id
+                )
+                if duplicate is not None:
+                    member.status = MemberStatus.DUPLICATE_ID.value
+                    member.detail = f"same Telegram user as member #{duplicate.id}"
+                    db.commit()
+                    continue
+
                 if resolved.deleted:
                     member.status = MemberStatus.DELETED_ACCOUNT.value
                     member.detail = "deleted Telegram account"
