@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+import asyncio
 import tempfile
+import uuid
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, status
 from sqlalchemy.orm import Session
@@ -49,6 +51,44 @@ from .web_telegram_auth import (
 )
 
 logger = get_logger()
+
+_RUN_JOBS: dict[str, dict] = {}
+_RUN_TASKS: set[asyncio.Task] = set()
+
+
+async def _run_campaign_job(job_id: str, campaign_id: int, token: str, live: bool, limit: int) -> None:
+    from .db import SessionLocal
+
+    job = _RUN_JOBS[job_id]
+    job["status"] = "running"
+    db = SessionLocal()
+    gateway = None
+    try:
+        campaign = _campaign_or_404(db, campaign_id)
+        settings = effective_settings(token)
+        _telegram_ready(settings)
+        gateway = TelegramGateway(settings)
+        if not await gateway.connect_authorized():
+            raise RuntimeError("Telegram session is not authorized")
+        engine = CampaignEngine(settings)
+        job["result"] = await engine.run(
+            db, campaign, gateway, requested_live=live,
+            limit=min(limit, settings.max_batch_size),
+        )
+        job["status"] = "completed"
+    except Exception as exc:
+        logger.warning("Campaign background job failed: %s", type(exc).__name__)
+        job["status"] = "failed"
+        job["error"] = type(exc).__name__
+    finally:
+        if gateway is not None:
+            await gateway.close()
+        db.close()
+
+
+def _remember_task(task: asyncio.Task) -> None:
+    _RUN_TASKS.add(task)
+    task.add_done_callback(_RUN_TASKS.discard)
 
 
 @asynccontextmanager
@@ -419,6 +459,51 @@ async def preflight_route(
         }
     finally:
         await gateway.close()
+
+
+@app.post("/campaigns/{campaign_id}/run-async")
+async def run_campaign_async_route(
+    campaign_id: int,
+    payload: CampaignRunRequest,
+    token: str = Depends(get_admin_token),
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(_effective_settings_dependency),
+):
+    campaign = _campaign_or_404(db, campaign_id)
+    _telegram_ready(settings)
+    if campaign.status == CampaignStatus.PAUSED.value:
+        raise HTTPException(status_code=409, detail="Campaign is paused; resume it first")
+    if payload.live and settings.dry_run:
+        raise HTTPException(status_code=409, detail="Global DRY_RUN blocks live invitations")
+    if payload.live and not campaign.live_enabled:
+        raise HTTPException(status_code=409, detail="Campaign live mode is not activated")
+
+    job_id = uuid.uuid4().hex
+    _RUN_JOBS[job_id] = {
+        "id": job_id,
+        "campaign_id": campaign_id,
+        "status": "queued",
+        "live": payload.live,
+        "limit": min(payload.limit, settings.max_batch_size),
+        "result": None,
+        "error": None,
+    }
+    task = asyncio.create_task(
+        _run_campaign_job(job_id, campaign_id, token, payload.live, payload.limit)
+    )
+    _remember_task(task)
+    return {"ok": True, "job_id": job_id, "status": "queued"}
+
+
+@app.get("/campaign-runs/{job_id}")
+def campaign_run_status(
+    job_id: str,
+    token: str = Depends(get_admin_token),
+):
+    job = _RUN_JOBS.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Campaign run not found")
+    return job
 
 
 @app.post("/campaigns/{campaign_id}/run", dependencies=[Depends(require_admin)])
