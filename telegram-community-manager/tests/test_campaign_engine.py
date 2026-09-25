@@ -198,3 +198,46 @@ async def test_flood_wait_is_persisted_and_stops_batch(db):
     assert rows["flood_user"].retry_after is not None
     assert rows["ready_user"].status == MemberStatus.IMPORTED.value
     assert gateway.invite_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_repeated_dry_run_advances_to_next_batch(db):
+    campaign = create_campaign(db, "advance", "@target")
+    add_usernames(db, campaign, ["ready_user", "privacy_user"])
+
+    gateway = FakeGateway()
+    settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
+    engine = CampaignEngine(settings)
+
+    first = await engine.run(db, campaign, gateway, requested_live=False, limit=1)
+    second = await engine.run(db, campaign, gateway, requested_live=False, limit=1)
+
+    rows = {
+        row.username: row.status
+        for row in db.scalars(select(CampaignMember)).all()
+    }
+    assert first["processed"] == 1
+    assert second["processed"] == 1
+    assert gateway.resolve_calls == 2
+    assert rows["ready_user"] == MemberStatus.READY_DIRECT_INVITE.value
+    assert rows["privacy_user"] == MemberStatus.READY_DIRECT_INVITE.value
+
+
+@pytest.mark.asyncio
+async def test_duplicate_identity_keeps_first_member_as_canonical(db):
+    campaign = create_campaign(db, "aliases", "@target")
+    add_usernames(db, campaign, ["alias_one", "alias_two"])
+
+    gateway = FakeGateway()
+    settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
+
+    await CampaignEngine(settings).run(
+        db, campaign, gateway, requested_live=False, limit=25
+    )
+
+    rows = {
+        row.username: row.status
+        for row in db.scalars(select(CampaignMember)).all()
+    }
+    assert rows["alias_one"] == MemberStatus.READY_DIRECT_INVITE.value
+    assert rows["alias_two"] == MemberStatus.DUPLICATE_ID.value
