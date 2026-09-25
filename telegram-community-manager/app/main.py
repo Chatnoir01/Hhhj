@@ -19,9 +19,31 @@ from .repository import (
     get_campaign,
     list_members,
 )
-from .schemas import CampaignCreate, CampaignRunRequest, LiveActivationRequest, UsernameImport
-from .security import require_admin
+from .schemas import (
+    CampaignCreate,
+    CampaignRunRequest,
+    LiveActivationRequest,
+    LoginRequest,
+    SetupRequest,
+    TelegramCodeRequest,
+    TelegramPasswordRequest,
+    UsernameImport,
+)
+from .security import get_admin_token, require_admin
+from .runtime_store import (
+    effective_settings,
+    initialize as initialize_runtime,
+    is_configured as runtime_is_configured,
+    login as runtime_login,
+    logout as runtime_logout,
+)
 from .telegram_gateway import TelegramGateway
+from .web_telegram_auth import (
+    send_login_code,
+    telegram_auth_status,
+    verify_2fa_password,
+    verify_login_code,
+)
 
 logger = get_logger()
 
@@ -42,6 +64,97 @@ app = FastAPI(
 @app.get("/", include_in_schema=False)
 def dashboard():
     return dashboard_response()
+
+
+def _effective_settings_dependency(
+    token: str = Depends(get_admin_token),
+) -> Settings:
+    return effective_settings(token)
+
+
+@app.get("/setup/status")
+def setup_status():
+    return {
+        "configured": runtime_is_configured(),
+        "env_admin_configured": bool(get_settings().admin_api_key),
+    }
+
+
+@app.post("/setup/initialize")
+def setup_initialize(payload: SetupRequest):
+    if runtime_is_configured():
+        raise HTTPException(status_code=409, detail="Setup already initialized")
+    try:
+        initialize_runtime(
+            password=payload.admin_password,
+            telegram_api_id=payload.telegram_api_id,
+            telegram_api_hash=payload.telegram_api_hash,
+            telegram_phone=payload.telegram_phone,
+            telegram_bot_token=payload.telegram_bot_token,
+        )
+        token, _ = runtime_login(payload.admin_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "token": token}
+
+
+@app.post("/auth/login")
+def admin_login(payload: LoginRequest):
+    if not runtime_is_configured():
+        raise HTTPException(status_code=409, detail="Setup is not initialized")
+    try:
+        token, _ = runtime_login(payload.admin_password)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid admin password") from exc
+    return {"ok": True, "token": token}
+
+
+@app.post("/auth/logout")
+def admin_logout(token: str = Depends(get_admin_token)):
+    runtime_logout(token)
+    return {"ok": True}
+
+
+@app.get("/telegram/auth/status")
+async def telegram_login_status(
+    token: str = Depends(get_admin_token),
+):
+    settings = effective_settings(token)
+    return {"ok": True, "authorized": await telegram_auth_status(settings)}
+
+
+@app.post("/telegram/auth/send-code")
+async def telegram_send_code(
+    token: str = Depends(get_admin_token),
+):
+    settings = effective_settings(token)
+    _telegram_ready(settings)
+    try:
+        return await send_login_code(token, settings)
+    except Exception as exc:
+        logger.warning("Telegram send-code failed: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Telegram login failed: {type(exc).__name__}",
+        ) from exc
+
+
+@app.post("/telegram/auth/verify-code")
+async def telegram_verify_code(
+    payload: TelegramCodeRequest,
+    token: str = Depends(get_admin_token),
+):
+    settings = effective_settings(token)
+    return await verify_login_code(token, settings, payload.code)
+
+
+@app.post("/telegram/auth/verify-2fa")
+async def telegram_verify_2fa(
+    payload: TelegramPasswordRequest,
+    token: str = Depends(get_admin_token),
+):
+    settings = effective_settings(token)
+    return await verify_2fa_password(token, settings, payload.password)
 
 
 def _campaign_or_404(db: Session, campaign_id: int):
@@ -97,14 +210,15 @@ def health():
     return {
         "ok": True,
         "dry_run": settings.dry_run,
-        "configured": len(settings.missing_secrets()) == 0,
+        "configured": runtime_is_configured() or len(settings.missing_secrets()) == 0,
         "version": app.version,
     }
 
 
 @app.get("/config/status", dependencies=[Depends(require_admin)])
-def config_status():
-    settings = get_settings()
+def config_status(
+    settings: Settings = Depends(_effective_settings_dependency),
+):
     return {
         "dry_run": settings.dry_run,
         "configured": len(settings.missing_secrets()) == 0,
@@ -155,7 +269,7 @@ async def import_file_route(
     campaign_id: int,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(_effective_settings_dependency),
 ):
     campaign = _campaign_or_404(db, campaign_id)
     suffix = Path(file.filename or "").suffix.lower()
@@ -185,7 +299,7 @@ def activate_live_route(
     campaign_id: int,
     payload: LiveActivationRequest,
     db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(_effective_settings_dependency),
 ):
     campaign = _campaign_or_404(db, campaign_id)
     if settings.dry_run:
@@ -227,7 +341,7 @@ def resume_campaign_route(
 async def preflight_route(
     campaign_id: int,
     db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(_effective_settings_dependency),
 ):
     campaign = _campaign_or_404(db, campaign_id)
     _telegram_ready(settings)
@@ -236,7 +350,7 @@ async def preflight_route(
         if not await gateway.connect_authorized():
             raise HTTPException(
                 status_code=409,
-                detail="Telegram session is not authorized; run scripts/auth_telegram.py locally",
+                detail="Telegram session is not authorized; connect Telegram from the web panel",
             )
         result = await gateway.preflight(campaign.target_group)
         return {
@@ -254,7 +368,7 @@ async def run_campaign_route(
     campaign_id: int,
     payload: CampaignRunRequest,
     db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(_effective_settings_dependency),
 ):
     campaign = _campaign_or_404(db, campaign_id)
     _telegram_ready(settings)
@@ -275,7 +389,7 @@ async def run_campaign_route(
         if not await gateway.connect_authorized():
             raise HTTPException(
                 status_code=409,
-                detail="Telegram session is not authorized; run scripts/auth_telegram.py locally",
+                detail="Telegram session is not authorized; connect Telegram from the web panel",
             )
         engine = CampaignEngine(settings)
         return await engine.run(
@@ -293,7 +407,7 @@ async def run_campaign_route(
 async def invite_link_route(
     campaign_id: int,
     db: Session = Depends(get_db),
-    settings: Settings = Depends(get_settings),
+    settings: Settings = Depends(_effective_settings_dependency),
 ):
     campaign = _campaign_or_404(db, campaign_id)
     _telegram_ready(settings)
