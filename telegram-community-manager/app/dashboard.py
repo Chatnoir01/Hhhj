@@ -19,7 +19,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     textarea{min-height:150px;resize:vertical}
     button{background:#3563ff;border:0;font-weight:700;cursor:pointer}
     button.secondary{background:#28324f}
-    button:disabled{opacity:.45}
+    button:disabled{opacity:.45}\n    .busy{opacity:.65;pointer-events:none}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
     .status{padding:10px;border-radius:10px;background:#0b1228;margin-top:8px}
     pre{white-space:pre-wrap;word-break:break-word;background:#090e1d;padding:12px;border-radius:10px;max-height:360px;overflow:auto}
@@ -90,7 +90,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     <section class="card">
       <h2>5. Analyser la campagne</h2>
       <p class="muted">Le dry-run résout et classe les comptes sans envoyer d'invitation.</p>
-      <button onclick="runDry()">Lancer un batch dry-run</button>
+      <button id="dryRunBtn" onclick="runDry()">Lancer un batch dry-run</button>\n      <div id="dryStatus" class="status muted">Prêt — aucun batch lancé</div>
       <button class="secondary" onclick="inviteLink()">Créer le lien d'invitation fallback</button>
     </section>
 
@@ -245,7 +245,27 @@ async function uploadFile(){
   let d; try{d=await r.json()}catch{d={detail:await r.text()}}
   output(d); if(!r.ok) throw new Error(d.detail||("HTTP "+r.status));
 }
-async function runDry(){await request("/campaigns/"+cid()+"/run","POST",{live:false,limit:100})}
+async function runDry(){
+  const btn=document.getElementById("dryRunBtn");
+  const status=document.getElementById("dryStatus");
+  let campaignId;
+  try{campaignId=cid()}catch(e){output({ok:false,error:e.message});status.textContent=e.message;status.className="status bad";return}
+  btn.disabled=true; btn.classList.add("busy");
+  status.textContent="Dry-run en cours…"; status.className="status warn";
+  output({ok:true,status:"DRY_RUN_STARTING",campaign_id:Number(campaignId),limit:100});
+  try{
+    const d=await request("/campaigns/"+campaignId+"/run","POST",{live:false,limit:100});
+    status.textContent="Dry-run terminé"; status.className="status ok";
+    output({action:"dry_run",...d});
+  }catch(e){
+    status.textContent="Dry-run bloqué : "+e.message; status.className="status bad";
+    const current=document.getElementById("out").textContent;
+    let detail={}; try{detail=JSON.parse(current)}catch{}
+    output({ok:false,action:"dry_run",error:e.message,server:detail});
+  }finally{
+    btn.disabled=false; btn.classList.remove("busy");
+  }
+}
 async function inviteLink(){await request("/campaigns/"+cid()+"/invite-link","POST",{})}
 
 window.addEventListener("load",boot);
