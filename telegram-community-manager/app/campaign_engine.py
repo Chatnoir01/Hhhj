@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import asdict
 
 from sqlalchemy.orm import Session
@@ -29,7 +30,13 @@ class CampaignEngine:
     ) -> dict:
         effective_live = requested_live and campaign.live_enabled and not self.settings.dry_run
 
-        preflight = await gateway.preflight(campaign.target_group)
+        try:
+            preflight = await asyncio.wait_for(gateway.preflight(campaign.target_group), timeout=30)
+        except TimeoutError:
+            campaign.status = CampaignStatus.FAILED.value
+            campaign.last_error = "Telegram preflight timed out"
+            db.commit()
+            return {"ok": False, "live": effective_live, "detail": campaign.last_error, "stats": campaign_stats(db, campaign.id)}
         if not preflight.ok:
             campaign.status = CampaignStatus.FAILED.value
             campaign.last_error = preflight.detail
@@ -64,7 +71,18 @@ class CampaignEngine:
                     username=member.username,
                 )
             else:
-                resolved = await gateway.resolve_username(member.username)
+                try:
+                    resolved = await asyncio.wait_for(gateway.resolve_username(member.username), timeout=30)
+                except TimeoutError:
+                    member.status = MemberStatus.FAILED_TEMPORARY.value
+                    member.detail = "username resolution timed out"
+                    db.commit()
+                    continue
+                except Exception as exc:
+                    member.status = MemberStatus.FAILED_TEMPORARY.value
+                    member.detail = f"username resolution: {type(exc).__name__}"
+                    db.commit()
+                    continue
                 if resolved is None:
                     member.status = MemberStatus.INVALID.value
                     member.detail = "username could not be resolved"
@@ -98,7 +116,7 @@ class CampaignEngine:
                 db.commit()
 
             try:
-                if await gateway.is_member(resolved):
+                if await asyncio.wait_for(gateway.is_member(resolved), timeout=30):
                     member.status = MemberStatus.ALREADY_MEMBER.value
                     member.detail = None
                     db.commit()
@@ -116,7 +134,18 @@ class CampaignEngine:
                 db.commit()
                 continue
 
-            result = await gateway.invite(resolved)
+            try:
+                result = await asyncio.wait_for(gateway.invite(resolved), timeout=30)
+            except TimeoutError:
+                member.status = MemberStatus.FAILED_TEMPORARY.value
+                member.detail = "invite request timed out; outcome not confirmed"
+                db.commit()
+                continue
+            except Exception as exc:
+                member.status = MemberStatus.FAILED_TEMPORARY.value
+                member.detail = f"invite request: {type(exc).__name__}"
+                db.commit()
+                continue
             member.status = result.status
             member.detail = result.detail
             member.retry_after = result.retry_after
