@@ -110,3 +110,26 @@ def list_members(db: Session, campaign_id: int, limit: int = 200) -> list[Campai
         .limit(limit)
     )
     return list(db.scalars(stmt).all())
+
+
+def list_campaigns(db: Session, limit: int = 100) -> list[Campaign]:
+    stmt = select(Campaign).order_by(Campaign.id.desc()).limit(limit)
+    return list(db.scalars(stmt).all())
+
+
+def members_by_status(
+    db: Session,
+    campaign_id: int,
+    statuses: set[str] | tuple[str, ...],
+    limit: int = 1000,
+) -> list[CampaignMember]:
+    stmt = (
+        select(CampaignMember)
+        .where(
+            CampaignMember.campaign_id == campaign_id,
+            CampaignMember.status.in_(tuple(statuses)),
+        )
+        .order_by(CampaignMember.id.asc())
+        .limit(limit)
+    )
+    return list(db.scalars(stmt).all())
