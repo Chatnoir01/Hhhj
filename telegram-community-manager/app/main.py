@@ -20,6 +20,7 @@ from .repository import (
     create_campaign,
     get_campaign,
     list_members,
+    list_campaigns,
 )
 from .schemas import (
     CampaignCreate,
@@ -207,7 +208,8 @@ def _serialize_campaign(db: Session, campaign) -> dict:
         "status": campaign.status,
         "live_enabled": campaign.live_enabled,
         "last_error": campaign.last_error,
-        "stats": campaign_stats(db, campaign.id),\n        "member_count": sum(campaign_stats(db, campaign.id).values()),
+        "stats": campaign_stats(db, campaign.id),
+        "member_count": sum(campaign_stats(db, campaign.id).values()),
         "members": [
             {
                 "id": member.id,
