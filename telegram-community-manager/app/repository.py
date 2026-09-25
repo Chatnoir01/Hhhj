@@ -1,6 +1,7 @@
 from collections import Counter
+from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from .models import Campaign, CampaignMember, CampaignStatus, MemberStatus
@@ -37,7 +38,8 @@ def add_usernames(db: Session, campaign: Campaign, usernames: list[str]) -> int:
 
 
 def pending_members(db: Session, campaign_id: int, limit: int) -> list[CampaignMember]:
-    resumable = (
+    now = datetime.now(timezone.utc)
+    immediately_resumable = (
         MemberStatus.IMPORTED.value,
         MemberStatus.RESOLVED.value,
         MemberStatus.READY_DIRECT_INVITE.value,
@@ -47,12 +49,50 @@ def pending_members(db: Session, campaign_id: int, limit: int) -> list[CampaignM
         select(CampaignMember)
         .where(
             CampaignMember.campaign_id == campaign_id,
-            CampaignMember.status.in_(resumable),
+            or_(
+                CampaignMember.status.in_(immediately_resumable),
+                and_(
+                    CampaignMember.status == MemberStatus.FLOOD_WAIT.value,
+                    CampaignMember.retry_after.is_not(None),
+                    CampaignMember.retry_after <= now,
+                ),
+            ),
         )
         .order_by(CampaignMember.id.asc())
         .limit(limit)
     )
     return list(db.scalars(stmt).all())
+
+
+def has_unfinished_members(db: Session, campaign_id: int) -> bool:
+    unfinished = (
+        MemberStatus.IMPORTED.value,
+        MemberStatus.RESOLVED.value,
+        MemberStatus.READY_DIRECT_INVITE.value,
+        MemberStatus.FAILED_TEMPORARY.value,
+        MemberStatus.FLOOD_WAIT.value,
+    )
+    stmt = (
+        select(CampaignMember.id)
+        .where(
+            CampaignMember.campaign_id == campaign_id,
+            CampaignMember.status.in_(unfinished),
+        )
+        .limit(1)
+    )
+    return db.scalar(stmt) is not None
+
+
+def has_flood_wait_members(db: Session, campaign_id: int) -> bool:
+    stmt = (
+        select(CampaignMember.id)
+        .where(
+            CampaignMember.campaign_id == campaign_id,
+            CampaignMember.status == MemberStatus.FLOOD_WAIT.value,
+        )
+        .limit(1)
+    )
+    return db.scalar(stmt) is not None
 
 
 def campaign_stats(db: Session, campaign_id: int) -> dict[str, int]:
