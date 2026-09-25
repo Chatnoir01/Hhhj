@@ -92,9 +92,28 @@ DASHBOARD_HTML = r"""<!doctype html>
     <section class="card">
       <h2>5. Analyser la campagne</h2>
       <p class="muted">Le dry-run résout et classe les comptes sans envoyer d'invitation.</p>
-      <button id="dryRunBtn" onclick="runDry()">Lancer un batch dry-run</button>\n      <p class="muted">Chaque appui analyse le prochain lot de 100 comptes. Les comptes déjà classés ne sont plus retraités en dry-run.</p>
+      <button id="dryRunBtn" onclick="runDry()">Lancer un batch dry-run</button>
+      <p class="muted">Chaque appui analyse le prochain lot de 100 comptes. Les comptes déjà classés ne sont plus retraités en dry-run.</p>
       <div id="dryStatus" class="status muted">Prêt — aucun batch lancé</div>
       <button class="secondary" onclick="inviteLink()">Créer le lien d'invitation fallback</button>
+    </section>
+
+    <section class="card">
+      <h2>6. Message d'invitation</h2>
+      <p class="muted">Message manuel à copier. Aucun DM massif n'est envoyé automatiquement.</p>
+      <textarea id="inviteMessage">🐈‍⬛ CHAT NOIR UHQ 🐈‍⬛
+
+⚠️ Notre ancien canal a sauté et plusieurs personnes utilisent notre nom.
+
+🐈‍⬛ Mon seul @ personnel : @chatnoir_uhq
+
+🔗 Nouveau groupe officiel : [LIEN TELEGRAM]
+
+⚠️ Faites attention aux faux comptes.</textarea>
+      <input id="inviteUrl" type="url" placeholder="Colle ici le lien Telegram officiel">
+      <button onclick="prepareInviteMessage()">Préparer le message</button>
+      <button class="secondary" onclick="copyInviteMessage()">Copier le message</button>
+      <div id="messageStatus" class="status muted">Le lien remplacera [LIEN TELEGRAM].</div>
     </section>
 
     <section class="card">
@@ -311,7 +330,39 @@ async function runDry(){
     btn.disabled=false; btn.classList.remove("busy");
   }
 }
-async function inviteLink(){await request("/campaigns/"+cid()+"/invite-link","POST",{})}
+async function inviteLink(){
+  const d=await request("/campaigns/"+cid()+"/invite-link","POST",{});
+  const link=d.link||d.invite_link||d.url;
+  if(link){
+    document.getElementById("inviteUrl").value=link;
+    prepareInviteMessage();
+  }
+  return d;
+}
+function prepareInviteMessage(){
+  const box=document.getElementById("inviteMessage");
+  const link=document.getElementById("inviteUrl").value.trim();
+  if(!link){
+    document.getElementById("messageStatus").textContent="Ajoute d'abord le lien Telegram officiel.";
+    document.getElementById("messageStatus").className="status warn";
+    return box.value;
+  }
+  box.value=box.value.replace(/\[LIEN TELEGRAM\]/g,link);
+  document.getElementById("messageStatus").textContent="Message prêt à copier.";
+  document.getElementById("messageStatus").className="status ok";
+  return box.value;
+}
+async function copyInviteMessage(){
+  const text=prepareInviteMessage();
+  try{
+    await navigator.clipboard.writeText(text);
+    document.getElementById("messageStatus").textContent="Message copié.";
+    document.getElementById("messageStatus").className="status ok";
+  }catch(e){
+    document.getElementById("messageStatus").textContent="Sélectionne le texte puis copie-le manuellement.";
+    document.getElementById("messageStatus").className="status warn";
+  }
+}
 
 window.addEventListener("load",boot);
 </script>
