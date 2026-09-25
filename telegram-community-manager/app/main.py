@@ -9,12 +9,13 @@ from .campaign_engine import CampaignEngine
 from .dashboard import dashboard_response
 from .config import Settings, get_settings
 from .db import get_db, init_db
-from .importers import _dedupe, load_usernames
+from .importers import _dedupe, load_members, load_usernames
 from .logging_config import get_logger
 from .github_publish import public_codespace_url, publish_codespace_port
 from .models import CampaignStatus, MemberStatus
 from .repository import (
     add_usernames,
+    add_member_mappings,
     campaign_stats,
     create_campaign,
     get_campaign,
@@ -300,11 +301,30 @@ async def import_file_route(
     with tempfile.NamedTemporaryFile(suffix=suffix) as handle:
         handle.write(data)
         handle.flush()
+        if suffix in {".csv", ".xlsx"}:
+            try:
+                members = load_members(handle.name)
+            except ValueError:
+                members = None
+        else:
+            members = None
+
+        if members is not None:
+            result = add_member_mappings(db, campaign, members)
+            return {
+                "ok": True,
+                "format": "telegram_id_username_mapping",
+                "records": len(members),
+                **result,
+                "stats": campaign_stats(db, campaign.id),
+            }
+
         usernames = load_usernames(handle.name)
 
     added = add_usernames(db, campaign, usernames)
     return {
         "ok": True,
+        "format": "usernames",
         "valid_unique": len(usernames),
         "added": added,
         "stats": campaign_stats(db, campaign.id),
