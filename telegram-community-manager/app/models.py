@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -63,8 +63,8 @@ class CampaignMember(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
     username: Mapped[str] = mapped_column(String(32), index=True)
-    telegram_user_id: Mapped[int | None] = mapped_column(nullable=True)
-    access_hash: Mapped[int | None] = mapped_column(nullable=True)
+    telegram_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    access_hash: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     status: Mapped[str] = mapped_column(String(40), default=MemberStatus.IMPORTED.value, index=True)
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
