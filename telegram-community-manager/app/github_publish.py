@@ -25,7 +25,7 @@ def publish_codespace_port(port: int = 8000) -> dict:
         return {"ok": False, "detail": "GitHub CLI is not available in this Codespace"}
 
     env = os.environ.copy()
-    result = subprocess.run(
+    process = subprocess.Popen(
         [
             "gh",
             "codespace",
@@ -35,14 +35,19 @@ def publish_codespace_port(port: int = 8000) -> dict:
             "-c",
             name,
         ],
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        timeout=30,
         env=env,
-        check=False,
     )
+    try:
+        process.communicate(timeout=30)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.communicate()
+        return {"ok": False, "detail": "GitHub port publication timed out"}
 
-    if result.returncode != 0:
+    if process.returncode != 0:
         return {
             "ok": False,
             "detail": "GitHub refused public port visibility. Check Codespaces port-visibility policy or authentication.",
