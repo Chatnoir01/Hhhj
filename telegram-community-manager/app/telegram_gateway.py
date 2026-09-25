@@ -45,6 +45,7 @@ class TelegramGateway:
             settings.telegram_api_hash,
         )
         self.target = None
+        self._chat_participant_ids: set[int] | None = None
 
     async def connect_authorized(self) -> bool:
         await self.client.connect()
@@ -118,8 +119,10 @@ class TelegramGateway:
             except errors.UserNotParticipantError:
                 return False
         if isinstance(self.target, Chat):
-            participants = await self.client.get_participants(self.target)
-            return any(int(member.id) == user.user_id for member in participants)
+            if self._chat_participant_ids is None:
+                participants = await self.client.get_participants(self.target)
+                self._chat_participant_ids = {int(member.id) for member in participants}
+            return user.user_id in self._chat_participant_ids
         return False
 
     async def invite(self, user: ResolvedUser) -> InviteResult:
