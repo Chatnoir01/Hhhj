@@ -52,7 +52,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     <section class="card">
       <h2>Lien public GitHub</h2>
       <p class="muted">Le panel peut rendre lui-même le port 8000 public depuis ce Codespace.</p>
-      <button onclick="publishGitHub()">Publier / réactiver le lien public</button>
+      <button onclick="publishGitHub()">Afficher / réactiver le lien public</button>
       <div id="publicUrl" class="status warn">Lien public pas encore activé</div>
     </section>
 
@@ -74,7 +74,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       <button onclick="createCampaign()">Créer la campagne</button>
       <input id="campaignId" inputmode="numeric" placeholder="ID campagne">
       <div class="grid">
-        <button class="secondary" onclick="loadCampaign()">Actualiser</button>
+        <button class="secondary" onclick="loadCampaign()">Actualiser</button>\n        <button class="secondary" onclick="listCampaigns()">Voir mes campagnes</button>
         <button class="secondary" onclick="preflight()">Préflight Telegram</button>
       </div>
     </section>
@@ -182,17 +182,29 @@ async function logout(){
 }
 
 async function publishGitHub(){
-  const d=await request("/github/publish","POST",{});
   const el=document.getElementById("publicUrl");
-  if(d.url){
-    el.textContent=d.url;
-    el.className="status ok";
-    el.onclick=()=>window.open(d.url,"_blank");
-  }else{
-    el.textContent="Port public activé";
-    el.className="status ok";
+  try{
+    const d=await request("/github/publish","POST",{});
+    if(d.url){
+      el.textContent=d.url; el.className="status ok";
+      el.onclick=()=>window.open(d.url,"_blank");
+    }else{
+      el.textContent="Port public activé"; el.className="status ok";
+    }
+    return d;
+  }catch(e){
+    try{
+      const d=await request("/github/public-url");
+      if(d.url){
+        el.textContent=d.url; el.className="status ok";
+        el.onclick=()=>window.open(d.url,"_blank");
+        return d;
+      }
+    }catch(_){}
+    el.textContent="Utilise le lien du port 8000 dans Codespaces";
+    el.className="status warn";
+    return null;
   }
-  return d;
 }
 
 async function refreshTelegramStatus(){
@@ -228,6 +240,14 @@ async function createCampaign(){
   document.getElementById("campaignId").value=d.id;
 }
 async function loadCampaign(){await request("/campaigns/"+cid())}
+async function listCampaigns(){
+  const d=await request("/campaigns");
+  if(d.campaigns && d.campaigns.length){
+    const current=document.getElementById("campaignId").value.trim();
+    if(!current) document.getElementById("campaignId").value=d.campaigns[0].id;
+  }
+  return d;
+}
 async function preflight(){await request("/campaigns/"+cid()+"/preflight","POST",{})}
 async function importUsernames(){
   const usernames=document.getElementById("usernames").value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean);
