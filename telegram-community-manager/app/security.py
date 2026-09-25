@@ -38,23 +38,36 @@ def require_admin(
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     settings: Settings = Depends(get_settings),
 ) -> None:
-    if not settings.admin_api_key:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="ADMIN_API_KEY is not configured",
-        )
-
     candidate = (
         credentials.credentials
         if credentials and credentials.scheme.lower() == "bearer"
         else ""
     )
-    if not hmac.compare_digest(candidate, settings.admin_api_key):
+
+    static_ok = bool(
+        settings.admin_api_key
+        and candidate
+        and hmac.compare_digest(candidate, settings.admin_api_key)
+    )
+
+    from .runtime_store import has_session, is_configured
+
+    runtime_ok = has_session(candidate)
+
+    if static_ok or runtime_ok:
+        return None
+
+    if not settings.admin_api_key and not is_configured():
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized",
-            headers={"WWW-Authenticate": "Bearer"},
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Admin setup is not initialized",
         )
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Unauthorized",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def secure_session_path(settings: Settings, session_name: str = "telegram") -> Path:
