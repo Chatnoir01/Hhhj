@@ -1,5 +1,3 @@
-from types import SimpleNamespace
-
 from app import github_publish
 
 
@@ -20,11 +18,22 @@ def test_publish_codespace_port_uses_github_cli(monkeypatch):
 
     seen = {}
 
-    def fake_run(args, **kwargs):
-        seen["args"] = args
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    class FakeProcess:
+        returncode = 0
 
-    monkeypatch.setattr(github_publish.subprocess, "run", fake_run)
+        def communicate(self, timeout=None):
+            seen["timeout"] = timeout
+            return "", ""
+
+        def kill(self):
+            raise AssertionError("kill should not be called")
+
+    def fake_popen(args, **kwargs):
+        seen["args"] = args
+        seen["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(github_publish.subprocess, "Popen", fake_popen)
 
     result = github_publish.publish_codespace_port(8000)
 
@@ -40,3 +49,4 @@ def test_publish_codespace_port_uses_github_cli(monkeypatch):
         "-c",
         "improved-telegram-abc",
     ]
+    assert seen["timeout"] == 30
