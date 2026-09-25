@@ -65,11 +65,11 @@ class TelegramGateway:
             detail = "target resolved"
             if isinstance(self.target, Channel):
                 try:
-                    permissions = await self.client.get_permissions(self.target, "me")
-                    admin_rights = getattr(permissions, "admin_rights", None)
-                    creator = bool(getattr(permissions, "is_creator", False))
-                    can_invite = creator or bool(
-                        admin_rights and getattr(admin_rights, "invite_users", False)
+                    me = await self.client.get_me()
+                    permissions = await self.client.get_permissions(self.target, me)
+                    can_invite = bool(
+                        getattr(permissions, "is_creator", False)
+                        or getattr(permissions, "invite_users", False)
                     )
                     detail = (
                         "admin invite permission verified"
