@@ -87,3 +87,25 @@ def test_no_destructive_taskkill_in_application_source():
 
     assert "taskkill" not in source.lower()
     assert "subprocess.run" not in source
+
+
+def test_localhost_bind_is_default():
+    assert Settings(_env_file=None).bind_host == "127.0.0.1"
+
+
+def test_no_permissive_cors_middleware():
+    names = {middleware.cls.__name__ for middleware in app.user_middleware}
+    assert "CORSMiddleware" not in names
+
+
+def test_redacting_filter_scrubs_log_output(capfd):
+    from app.logging_config import get_logger
+
+    logger = get_logger("security-test")
+    logger.warning("code=123456 password=secret api_hash=abcdef")
+    captured = capfd.readouterr()
+
+    assert "123456" not in captured.err
+    assert "secret" not in captured.err
+    assert "abcdef" not in captured.err
+    assert "[REDACTED]" in captured.err
