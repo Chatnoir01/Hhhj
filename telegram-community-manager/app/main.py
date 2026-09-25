@@ -1,7 +1,10 @@
 from fastapi import Depends, FastAPI
 
 from .config import get_settings
+from .logging_config import get_logger
 from .security import require_admin
+
+logger = get_logger()
 
 app = FastAPI(title="Telegram Community Manager", version="0.2.0")
 
