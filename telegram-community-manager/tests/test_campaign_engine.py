@@ -1,0 +1,200 @@
+from datetime import datetime, timezone
+
+import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+
+from app.campaign_engine import CampaignEngine
+from app.config import Settings
+from app.db import Base
+from app.models import CampaignMember, MemberStatus
+from app.repository import add_usernames, create_campaign
+from app.telegram_gateway import InviteResult, PreflightResult, ResolvedUser
+
+
+class FakeGateway:
+    def __init__(self):
+        self.resolve_calls = 0
+        self.invite_calls = 0
+        self.members = set()
+        self.invite_results = {}
+
+    async def preflight(self, target_group):
+        return PreflightResult(
+            ok=True,
+            target_title="Target",
+            can_invite=True,
+            detail="ok",
+        )
+
+    async def resolve_username(self, username):
+        self.resolve_calls += 1
+        if username == "invalid_user":
+            return None
+        if username == "bot_user":
+            return ResolvedUser(2, 22, username, is_bot=True)
+        if username == "deleted_user":
+            return ResolvedUser(3, 33, username, deleted=True)
+        ids = {
+            "member_user": (4, 44),
+            "ready_user": (5, 55),
+            "privacy_user": (6, 66),
+            "flood_user": (7, 77),
+        }
+        user_id, access_hash = ids.get(username, (99, 999))
+        return ResolvedUser(user_id, access_hash, username)
+
+    async def is_member(self, user):
+        return user.username in self.members
+
+    async def invite(self, user):
+        self.invite_calls += 1
+        return self.invite_results.get(
+            user.username,
+            InviteResult(MemberStatus.DIRECT_INVITED.value),
+        )
+
+
+@pytest.fixture
+def db():
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        yield session
+
+
+@pytest.mark.asyncio
+async def test_dry_run_classifies_without_inviting(db):
+    campaign = create_campaign(db, "dry", "@target")
+    add_usernames(
+        db,
+        campaign,
+        [
+            "invalid_user",
+            "bot_user",
+            "deleted_user",
+            "member_user",
+            "ready_user",
+        ],
+    )
+
+    gateway = FakeGateway()
+    gateway.members.add("member_user")
+    settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
+
+    result = await CampaignEngine(settings).run(
+        db,
+        campaign,
+        gateway,
+        requested_live=False,
+        limit=25,
+    )
+
+    rows = {
+        row.username: row.status
+        for row in db.scalars(select(CampaignMember)).all()
+    }
+
+    assert result["live"] is False
+    assert gateway.invite_calls == 0
+    assert rows["invalid_user"] == MemberStatus.INVALID.value
+    assert rows["bot_user"] == MemberStatus.BOT_ACCOUNT.value
+    assert rows["deleted_user"] == MemberStatus.DELETED_ACCOUNT.value
+    assert rows["member_user"] == MemberStatus.ALREADY_MEMBER.value
+    assert rows["ready_user"] == MemberStatus.READY_DIRECT_INVITE.value
+
+
+@pytest.mark.asyncio
+async def test_global_dry_run_blocks_invite_even_if_live_requested(db):
+    campaign = create_campaign(db, "safe", "@target")
+    campaign.live_enabled = True
+    add_usernames(db, campaign, ["ready_user"])
+    db.commit()
+
+    gateway = FakeGateway()
+    settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
+
+    result = await CampaignEngine(settings).run(
+        db,
+        campaign,
+        gateway,
+        requested_live=True,
+        limit=25,
+    )
+
+    member = db.scalar(select(CampaignMember))
+    assert result["live"] is False
+    assert member.status == MemberStatus.READY_DIRECT_INVITE.value
+    assert gateway.invite_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_resume_from_dry_run_reuses_resolved_identity_and_invites(db):
+    campaign = create_campaign(db, "resume", "@target")
+    add_usernames(db, campaign, ["ready_user"])
+
+    gateway = FakeGateway()
+    settings = Settings(_env_file=None, dry_run=False, admin_api_key="x" * 40)
+    engine = CampaignEngine(settings)
+
+    await engine.run(
+        db,
+        campaign,
+        gateway,
+        requested_live=False,
+        limit=25,
+    )
+    assert gateway.resolve_calls == 1
+
+    campaign.live_enabled = True
+    db.commit()
+
+    result = await engine.run(
+        db,
+        campaign,
+        gateway,
+        requested_live=True,
+        limit=25,
+    )
+
+    member = db.scalar(select(CampaignMember))
+    assert result["live"] is True
+    assert member.status == MemberStatus.DIRECT_INVITED.value
+    assert gateway.resolve_calls == 1
+    assert gateway.invite_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_flood_wait_is_persisted_and_stops_batch(db):
+    campaign = create_campaign(db, "flood", "@target")
+    campaign.live_enabled = True
+    add_usernames(db, campaign, ["flood_user", "ready_user"])
+    db.commit()
+
+    gateway = FakeGateway()
+    retry_at = datetime.now(timezone.utc)
+    gateway.invite_results["flood_user"] = InviteResult(
+        MemberStatus.FLOOD_WAIT.value,
+        "FloodWait",
+        retry_at,
+    )
+
+    settings = Settings(_env_file=None, dry_run=False, admin_api_key="x" * 40)
+    result = await CampaignEngine(settings).run(
+        db,
+        campaign,
+        gateway,
+        requested_live=True,
+        limit=25,
+    )
+
+    rows = {
+        row.username: row
+        for row in db.scalars(select(CampaignMember)).all()
+    }
+
+    assert result["campaign_status"] == "FLOOD_WAIT"
+    assert rows["flood_user"].status == MemberStatus.FLOOD_WAIT.value
+    assert rows["flood_user"].retry_after is not None
+    assert rows["ready_user"].status == MemberStatus.IMPORTED.value
+    assert gateway.invite_calls == 1
