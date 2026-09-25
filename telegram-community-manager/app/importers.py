@@ -23,7 +23,9 @@ def normalize_username(value: object) -> str | None:
         return None
     raw = raw.replace("https://t.me/", "").replace("http://t.me/", "").replace("t.me/", "")
     raw = raw.split("?", 1)[0].split("/", 1)[0].lstrip("@").strip()
-    if TELEGRAM_ID_RE.fullmatch(raw):\n        return None\n    return raw.lower() if USERNAME_RE.fullmatch(raw) else None
+    if TELEGRAM_ID_RE.fullmatch(raw):
+        return None
+    return raw.lower() if USERNAME_RE.fullmatch(raw) else None
 
 
 def normalize_telegram_id(value: object) -> int | None:
