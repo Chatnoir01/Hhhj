@@ -6,6 +6,7 @@ from .config import Settings
 from .models import Campaign, CampaignStatus, MemberStatus
 from .repository import (
     campaign_stats,
+    duplicate_telegram_identity,
     has_flood_wait_members,
     has_unfinished_members,
     pending_members,
