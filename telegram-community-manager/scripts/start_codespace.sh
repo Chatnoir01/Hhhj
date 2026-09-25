@@ -4,16 +4,22 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p data logs
 
-if ! pgrep -f "uvicorn app.main:app" >/dev/null 2>&1; then
-  nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > logs/codespace-web.log 2>&1 &
+# Do not trust a stale process match: the web app is considered alive only if
+# its health endpoint answers successfully.
+if ! curl -fsS --max-time 2 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+  pkill -f "uvicorn app.main:app" >/dev/null 2>&1 || true
+  nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000     > logs/codespace-web.log 2>&1 &
+
+  # Wait until FastAPI is actually ready before exposing the port.
+  for _ in {1..30}; do
+    if curl -fsS --max-time 2 http://127.0.0.1:8000/health >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
 fi
 
-# After the first admin setup, re-assert public visibility on each Codespace start.
-# GitHub resets public forwarded ports to private on restart, so this keeps the
-# panel reachable without another manual Ports-panel action.
-if [[ -f data/runtime_config.json && -n "${CODESPACE_NAME:-}" ]] && command -v gh >/dev/null 2>&1; then
-  (
-    sleep 5
-    gh codespace ports visibility 8000:public -c "$CODESPACE_NAME"       >> logs/codespace-publish.log 2>&1 || true
-  ) &
+# Re-assert public visibility on every Codespace start.
+if [[ -n "${CODESPACE_NAME:-}" ]] && command -v gh >/dev/null 2>&1; then
+  gh codespace ports visibility 8000:public -c "$CODESPACE_NAME"     >> logs/codespace-publish.log 2>&1 || true
 fi
