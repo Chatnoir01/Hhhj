@@ -42,3 +42,9 @@ class TelegramCodeRequest(BaseModel):
 
 class TelegramPasswordRequest(BaseModel):
     password: str = Field(min_length=1, max_length=256)
+
+
+class TelegramGroupCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=128)
+    about: str = Field(default="", max_length=255)
+    username: str | None = Field(default=None, min_length=5, max_length=32)
