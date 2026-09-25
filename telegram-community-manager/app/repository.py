@@ -79,9 +79,9 @@ def duplicate_telegram_identity(
         select(CampaignMember)
         .where(
             CampaignMember.campaign_id == campaign_id,
-            CampaignMember.id != member_id,
+            CampaignMember.id < member_id,
             CampaignMember.telegram_user_id == telegram_user_id,
-            CampaignMember.status != MemberStatus.INVALID.value,
+            CampaignMember.status.notin_((MemberStatus.INVALID.value, MemberStatus.DUPLICATE_ID.value)),
         )
         .order_by(CampaignMember.id.asc())
         .limit(1)
@@ -89,14 +89,21 @@ def duplicate_telegram_identity(
     return db.scalar(stmt)
 
 
-def pending_members(db: Session, campaign_id: int, limit: int) -> list[CampaignMember]:
+def pending_members(
+    db: Session,
+    campaign_id: int,
+    limit: int,
+    *,
+    include_ready_direct_invite: bool = True,
+) -> list[CampaignMember]:
     now = datetime.now(timezone.utc)
-    immediately_resumable = (
+    immediately_resumable = [
         MemberStatus.IMPORTED.value,
         MemberStatus.RESOLVED.value,
-        MemberStatus.READY_DIRECT_INVITE.value,
         MemberStatus.FAILED_TEMPORARY.value,
-    )
+    ]
+    if include_ready_direct_invite:
+        immediately_resumable.append(MemberStatus.READY_DIRECT_INVITE.value)
     stmt = (
         select(CampaignMember)
         .where(
