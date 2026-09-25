@@ -92,7 +92,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     <section class="card">
       <h2>5. Analyser la campagne</h2>
       <p class="muted">Le dry-run résout et classe les comptes sans envoyer d'invitation.</p>
-      <button id="dryRunBtn" onclick="runDry()">Lancer un batch dry-run</button>
+      <button id="dryRunBtn" onclick="runDry()">Lancer un batch dry-run</button>\n      <p class="muted">Chaque appui analyse le prochain lot de 100 comptes. Les comptes déjà classés ne sont plus retraités en dry-run.</p>
       <div id="dryStatus" class="status muted">Prêt — aucun batch lancé</div>
       <button class="secondary" onclick="inviteLink()">Créer le lien d'invitation fallback</button>
     </section>
@@ -274,7 +274,7 @@ async function runDry(){
   let campaignId;
   try{campaignId=cid()}catch(e){output({ok:false,error:e.message});status.textContent=e.message;status.className="status bad";return}
   btn.disabled=true; btn.classList.add("busy");
-  status.textContent="Dry-run en cours…"; status.className="status warn";
+  status.textContent="Dry-run en cours — prochain lot de 100…"; status.className="status warn";
   output({ok:true,status:"DRY_RUN_STARTING",campaign_id:Number(campaignId),limit:100});
   try{
     const d=await request("/campaigns/"+campaignId+"/run","POST",{live:false,limit:100});
