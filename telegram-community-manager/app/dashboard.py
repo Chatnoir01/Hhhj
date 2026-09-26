@@ -145,7 +145,9 @@ async function request(path,method="GET",body=null,auth=true){
   const opt={method,headers};
   if(body!==null){headers["Content-Type"]="application/json";opt.body=JSON.stringify(body)}
   const r=await fetch(path,opt);
-  let data; try{data=await r.json()}catch{data={detail:await r.text()}}
+  const raw=await r.text();
+  let data;
+  try{data=raw?JSON.parse(raw):{}}catch{data={detail:raw||("HTTP "+r.status)}}
   output(data);
   if(!r.ok) throw new Error(data.detail||("HTTP "+r.status));
   return data;
@@ -284,7 +286,8 @@ async function uploadFile(){
     headers:{"Authorization":"Bearer "+token},
     body:form
   });
-  let d; try{d=await r.json()}catch{d={detail:await r.text()}}
+  const raw=await r.text();
+  let d; try{d=raw?JSON.parse(raw):{}}catch{d={detail:raw||("HTTP "+r.status)}}
   output(d); if(!r.ok) throw new Error(d.detail||("HTTP "+r.status));
 }
 async function runDry(){
