@@ -300,6 +300,7 @@ async function runDry(){
   try{
     const started=await request("/campaigns/"+campaignId+"/run-async","POST",{live:false,limit:100});
     const jobId=started.job_id;
+    if(started.already_running){status.textContent="Un dry-run est déjà en cours — reprise du suivi…"; status.className="status warn";}
     let failures=0;
     for(let attempt=0;attempt<180;attempt++){
       await new Promise(resolve=>setTimeout(resolve,2000));
