@@ -29,3 +29,12 @@ def test_dashboard_has_resilient_async_dry_run_and_manual_message_composer():
     assert "navigator.clipboard.writeText" in text
     assert "DM massif" in text
     assert "</button>\\n" not in text
+
+
+def test_dashboard_reads_each_http_body_only_once():
+    client = TestClient(app)
+    text = client.get("/").text
+    assert "const raw=await r.text()" in text
+    assert "data=raw?JSON.parse(raw)" in text
+    assert "detail:await r.text()" not in text
+    assert "already_running" in text
