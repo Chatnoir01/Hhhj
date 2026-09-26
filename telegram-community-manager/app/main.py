@@ -54,28 +54,30 @@ logger = get_logger()
 
 _RUN_JOBS: dict[str, dict] = {}
 _RUN_TASKS: set[asyncio.Task] = set()
+_RUN_LOCK = asyncio.Lock()
 
 
 async def _run_campaign_job(job_id: str, campaign_id: int, token: str, live: bool, limit: int) -> None:
     from .db import SessionLocal
 
     job = _RUN_JOBS[job_id]
-    job["status"] = "running"
     db = SessionLocal()
     gateway = None
     try:
-        campaign = _campaign_or_404(db, campaign_id)
-        settings = effective_settings(token)
-        _telegram_ready(settings)
-        gateway = TelegramGateway(settings)
-        if not await gateway.connect_authorized():
-            raise RuntimeError("Telegram session is not authorized")
-        engine = CampaignEngine(settings)
-        job["result"] = await engine.run(
-            db, campaign, gateway, requested_live=live,
-            limit=min(limit, settings.max_batch_size),
-        )
-        job["status"] = "completed"
+        async with _RUN_LOCK:
+            job["status"] = "running"
+            campaign = _campaign_or_404(db, campaign_id)
+            settings = effective_settings(token)
+            _telegram_ready(settings)
+            gateway = TelegramGateway(settings)
+            if not await gateway.connect_authorized():
+                raise RuntimeError("Telegram session is not authorized")
+            engine = CampaignEngine(settings)
+            job["result"] = await engine.run(
+                db, campaign, gateway, requested_live=live,
+                limit=min(limit, settings.max_batch_size),
+            )
+            job["status"] = "completed"
     except Exception as exc:
         logger.warning("Campaign background job failed: %s", type(exc).__name__)
         job["status"] = "failed"
@@ -477,6 +479,11 @@ async def run_campaign_async_route(
         raise HTTPException(status_code=409, detail="Global DRY_RUN blocks live invitations")
     if payload.live and not campaign.live_enabled:
         raise HTTPException(status_code=409, detail="Campaign live mode is not activated")
+
+    # Idempotent start: repeated taps/browser retries follow the existing job.
+    for existing in _RUN_JOBS.values():
+        if existing["campaign_id"] == campaign_id and existing["status"] in {"queued", "running"}:
+            return {"ok": True, "job_id": existing["id"], "status": existing["status"], "already_running": True}
 
     job_id = uuid.uuid4().hex
     _RUN_JOBS[job_id] = {
