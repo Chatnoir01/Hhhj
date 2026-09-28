@@ -476,6 +476,15 @@ async def preflight_route(
         await gateway.close()
 
 
+@app.get("/campaigns/{campaign_id}/progress", dependencies=[Depends(require_admin)])
+def campaign_progress_route(campaign_id: int, db: Session = Depends(get_db)):
+    campaign = _campaign_or_404(db, campaign_id)
+    stats = campaign_stats(db, campaign_id)
+    total = sum(stats.values())
+    untouched = stats.get(MemberStatus.IMPORTED.value, 0)
+    return {"ok": True, "campaign_id": campaign_id, "status": campaign.status, "last_error": campaign.last_error, "stats": stats, "total": total, "attempted": total - untouched, "remaining_imported": untouched}
+
+
 @app.post("/campaigns/{campaign_id}/run-async")
 async def run_campaign_async_route(
     campaign_id: int,
@@ -493,6 +502,14 @@ async def run_campaign_async_route(
     if payload.live and not campaign.live_enabled:
         raise HTTPException(status_code=409, detail="Campaign live mode is not activated")
 
+    # RUNNING is persisted in SQLite. Duplicate taps remain blocked even when
+    # volatile browser/job metadata is gone. Startup recovers stale RUNNING.
+    if campaign.status == CampaignStatus.RUNNING.value:
+        for existing in _RUN_JOBS.values():
+            if existing["campaign_id"] == campaign_id and existing["status"] in {"queued", "running"}:
+                return {"ok": True, "job_id": existing["id"], "status": existing["status"], "already_running": True}
+        return {"ok": True, "campaign_id": campaign_id, "status": "running", "already_running": True}
+
     # Idempotent start: repeated taps/browser retries follow the existing job.
     for existing in _RUN_JOBS.values():
         if existing["campaign_id"] == campaign_id and existing["status"] in {"queued", "running"}:
@@ -508,6 +525,10 @@ async def run_campaign_async_route(
         "result": None,
         "error": None,
     }
+    # Persist RUNNING before returning. The UI polls durable SQLite progress.
+    campaign.status = CampaignStatus.RUNNING.value
+    campaign.last_error = None
+    db.commit()
     task = asyncio.create_task(
         _run_campaign_job(job_id, campaign_id, token, payload.live, payload.limit)
     )
