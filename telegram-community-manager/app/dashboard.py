@@ -315,7 +315,7 @@ async function runDry(){
         if(job.status==="failed"){
           throw new Error(job.error||"Traitement serveur échoué");
         }
-        status.textContent="Dry-run en cours côté serveur…"; status.className="status warn";
+        if(job.status==="lost_after_restart"){\n          const persisted=await request("/campaigns/"+campaignId);\n          output(persisted);\n          status.textContent="Serveur redemarre : progression conservee. Relance le dry-run pour reprendre.";\n          status.className="status warn";\n          return;\n        }\n        status.textContent="Dry-run en cours côté serveur…"; status.className="status warn";
       }catch(e){
         failures++;
         if(failures<5){
