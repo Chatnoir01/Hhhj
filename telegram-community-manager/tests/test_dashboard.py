@@ -6,7 +6,6 @@ from app.main import app
 def test_dashboard_is_available_without_exposing_secret_values():
     client = TestClient(app)
     response = client.get("/")
-
     assert response.status_code == 200
     assert "Telegram Community Manager" in response.text
     assert "Premier setup" in response.text
@@ -17,12 +16,11 @@ def test_dashboard_is_available_without_exposing_secret_values():
 
 def test_dashboard_has_resilient_async_dry_run_and_manual_message_composer():
     client = TestClient(app)
-    response = client.get("/")
-    text = response.text
-
-    assert response.status_code == 200
+    text = client.get("/").text
     assert "/run-async" in text
-    assert "/campaigns/"+'" +campaignId+ "'+"/progress" in text\n    assert "/campaign-runs/" not in text
+    assert '/campaigns/"+campaignId+"/progress' in text
+    assert "/campaign-runs/" not in text
+    assert "remaining_imported" in text
     assert "Message d'invitation" in text
     assert "@chatnoir_uhq" in text
     assert "[LIEN TELEGRAM]" in text
@@ -37,4 +35,4 @@ def test_dashboard_reads_each_http_body_only_once():
     assert "const raw=await r.text()" in text
     assert "data=raw?JSON.parse(raw)" in text
     assert "detail:await r.text()" not in text
-    assert "already_running" in text\n    assert "remaining_imported" in text
+    assert "already_running" in text
