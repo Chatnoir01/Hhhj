@@ -96,6 +96,19 @@ def _remember_task(task: asyncio.Task) -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     init_db()
+    # In-memory workers cannot survive a process/Codespace restart. Any RUNNING
+    # campaign found at startup is therefore stale and must become resumable.
+    from .db import SessionLocal
+    db = SessionLocal()
+    try:
+        stale = db.query(__import__("app.models", fromlist=["Campaign"]).Campaign).filter_by(status=CampaignStatus.RUNNING.value).all()
+        for campaign in stale:
+            campaign.status = CampaignStatus.READY.value
+            campaign.last_error = "Recovered after server restart; resume from persisted member checkpoints."
+        if stale:
+            db.commit()
+    finally:
+        db.close()
     yield
 
 
@@ -509,7 +522,9 @@ def campaign_run_status(
 ):
     job = _RUN_JOBS.get(job_id)
     if job is None:
-        raise HTTPException(status_code=404, detail="Campaign run not found")
+        # A restart clears in-memory job metadata, but member checkpoints live
+        # in SQLite. Return an explicit recoverable state instead of a dead 404.
+        return {"id": job_id, "status": "lost_after_restart", "recoverable": True}
     return job
 
 
