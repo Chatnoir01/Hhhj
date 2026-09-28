@@ -299,34 +299,28 @@ async function runDry(){
   status.textContent="Dry-run lancé côté serveur…"; status.className="status warn";
   try{
     const started=await request("/campaigns/"+campaignId+"/run-async","POST",{live:false,limit:100});
-    const jobId=started.job_id;
-    if(started.already_running){status.textContent="Un dry-run est déjà en cours — reprise du suivi…"; status.className="status warn";}
+    if(started.already_running){status.textContent="Traitement déjà en cours — suivi de la progression persistante…";}
     let failures=0;
     for(let attempt=0;attempt<180;attempt++){
       await new Promise(resolve=>setTimeout(resolve,2000));
       try{
-        const job=await request("/campaign-runs/"+jobId);
+        const progress=await request("/campaigns/"+campaignId+"/progress");
         failures=0;
-        if(job.status==="completed"){
-          status.textContent="Dry-run terminé"; status.className="status ok";
-          output({action:"dry_run",job_id:jobId,...job.result});
+        status.textContent="Dry-run : "+progress.attempted+"/"+progress.total+" vérifiés, "+progress.remaining_imported+" non traités";
+        status.className="status warn";
+        if(progress.status!=="RUNNING"){
+          output({action:"dry_run",...progress});
+          status.textContent="Lot terminé — "+progress.attempted+"/"+progress.total+" vérifiés";
+          status.className=progress.status==="FAILED"?"status bad":"status ok";
           return;
         }
-        if(job.status==="failed"){
-          throw new Error(job.error||"Traitement serveur échoué");
-        }
-        if(job.status==="lost_after_restart"){\n          const persisted=await request("/campaigns/"+campaignId);\n          output(persisted);\n          status.textContent="Serveur redemarre : progression conservee. Relance le dry-run pour reprendre.";\n          status.className="status warn";\n          return;\n        }\n        status.textContent="Dry-run en cours côté serveur…"; status.className="status warn";
       }catch(e){
         failures++;
-        if(failures<5){
-          status.textContent="Connexion momentanément perdue — le serveur continue…";
-          status.className="status warn";
-          continue;
-        }
+        if(failures<5){status.textContent="Connexion momentanément perdue — checkpoints conservés…";status.className="status warn";continue}
         throw e;
       }
     }
-    throw new Error("Le traitement continue mais le suivi a expiré. Actualise la campagne.");
+    throw new Error("Le serveur travaille encore. La progression reste enregistrée dans SQLite.");
   }catch(e){
     status.textContent="Suivi interrompu : "+e.message; status.className="status bad";
     output({ok:false,action:"dry_run",error:e.message});
