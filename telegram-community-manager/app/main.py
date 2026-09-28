@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 import asyncio
+import json
 import tempfile
 import uuid
 
@@ -14,7 +15,7 @@ from .db import get_db, init_db
 from .importers import _dedupe, load_members, load_usernames
 from .logging_config import get_logger
 from .github_publish import public_codespace_url, publish_codespace_port
-from .models import CampaignStatus, MemberStatus
+from .models import CampaignRun, CampaignStatus, MemberStatus
 from .repository import (
     add_usernames,
     add_member_mappings,
@@ -62,10 +63,14 @@ async def _run_campaign_job(job_id: str, campaign_id: int, token: str, live: boo
 
     job = _RUN_JOBS[job_id]
     db = SessionLocal()
+    run_record = db.get(CampaignRun, job_id)
     gateway = None
     try:
         async with _RUN_LOCK:
             job["status"] = "running"
+            if run_record is not None:
+                run_record.status = "running"
+                db.commit()
             campaign = _campaign_or_404(db, campaign_id)
             settings = effective_settings(token)
             _telegram_ready(settings)
@@ -78,10 +83,18 @@ async def _run_campaign_job(job_id: str, campaign_id: int, token: str, live: boo
                 limit=min(limit, settings.max_batch_size),
             )
             job["status"] = "completed"
+            if run_record is not None:
+                run_record.status = "completed"
+                run_record.result_json = json.dumps(job["result"], default=str)
+                db.commit()
     except Exception as exc:
         logger.warning("Campaign background job failed: %s", type(exc).__name__)
         job["status"] = "failed"
         job["error"] = type(exc).__name__
+        if run_record is not None:
+            run_record.status = "failed"
+            run_record.error = type(exc).__name__
+            db.commit()
     finally:
         if gateway is not None:
             await gateway.close()
@@ -105,7 +118,11 @@ async def lifespan(_: FastAPI):
         for campaign in stale:
             campaign.status = CampaignStatus.READY.value
             campaign.last_error = "Recovered after server restart; resume from persisted member checkpoints."
-        if stale:
+        stale_runs = db.query(CampaignRun).filter(CampaignRun.status.in_(("queued", "running"))).all()
+        for run in stale_runs:
+            run.status = "interrupted"
+            run.error = "server restarted; safe to resume from persisted member checkpoints"
+        if stale or stale_runs:
             db.commit()
     finally:
         db.close()
@@ -516,6 +533,8 @@ async def run_campaign_async_route(
             return {"ok": True, "job_id": existing["id"], "status": existing["status"], "already_running": True}
 
     job_id = uuid.uuid4().hex
+    db.add(CampaignRun(id=job_id, campaign_id=campaign_id, status="queued", live=payload.live, limit=min(payload.limit, settings.max_batch_size)))
+    db.commit()
     _RUN_JOBS[job_id] = {
         "id": job_id,
         "campaign_id": campaign_id,
@@ -542,11 +561,17 @@ def campaign_run_status(
     token: str = Depends(get_admin_token),
 ):
     job = _RUN_JOBS.get(job_id)
-    if job is None:
-        # A restart clears in-memory job metadata, but member checkpoints live
-        # in SQLite. Return an explicit recoverable state instead of a dead 404.
-        return {"id": job_id, "status": "lost_after_restart", "recoverable": True}
-    return job
+    if job is not None:
+        return job
+    from .db import SessionLocal
+    db = SessionLocal()
+    try:
+        run = db.get(CampaignRun, job_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Campaign run not found")
+        return {"id": run.id, "campaign_id": run.campaign_id, "status": run.status, "live": run.live, "limit": run.limit, "result": json.loads(run.result_json) if run.result_json else None, "error": run.error, "recoverable": run.status == "interrupted"}
+    finally:
+        db.close()
 
 
 @app.post("/campaigns/{campaign_id}/run", dependencies=[Depends(require_admin)])
