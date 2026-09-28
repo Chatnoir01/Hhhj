@@ -57,6 +57,21 @@ class Campaign(Base):
     )
 
 
+class CampaignRun(Base):
+    """Persistent record of a campaign batch; survives browser/server restarts."""
+    __tablename__ = "campaign_runs"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    campaign_id: Mapped[int] = mapped_column(ForeignKey("campaigns.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(24), default="queued", index=True)
+    live: Mapped[bool] = mapped_column(Boolean, default=False)
+    limit: Mapped[int] = mapped_column(Integer, default=100)
+    result_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class CampaignMember(Base):
     __tablename__ = "campaign_members"
     __table_args__ = (UniqueConstraint("campaign_id", "username", name="uq_campaign_username"),)
