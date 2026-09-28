@@ -22,7 +22,7 @@ def test_dashboard_has_resilient_async_dry_run_and_manual_message_composer():
 
     assert response.status_code == 200
     assert "/run-async" in text
-    assert "/campaign-runs/" in text
+    assert "/campaigns/"+'" +campaignId+ "'+"/progress" in text\n    assert "/campaign-runs/" not in text
     assert "Message d'invitation" in text
     assert "@chatnoir_uhq" in text
     assert "[LIEN TELEGRAM]" in text
@@ -37,4 +37,4 @@ def test_dashboard_reads_each_http_body_only_once():
     assert "const raw=await r.text()" in text
     assert "data=raw?JSON.parse(raw)" in text
     assert "detail:await r.text()" not in text
-    assert "already_running" in text
+    assert "already_running" in text\n    assert "remaining_imported" in text
