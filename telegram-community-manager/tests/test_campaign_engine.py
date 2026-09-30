@@ -307,3 +307,74 @@ async def test_fresh_members_are_processed_before_transient_retries(db):
     assert result["processed"] == 1
     assert rows["ready_user"].status == MemberStatus.READY_DIRECT_INVITE.value
     assert rows["old_failure"].attempts == 0
+
+
+@pytest.mark.asyncio
+async def test_1700_member_dry_run_completes_in_100_batches(db):
+    campaign = create_campaign(db, "scale", "@target")
+    names = [f"user_{i:04d}" for i in range(1700)]
+    add_usernames(db, campaign, names)
+
+    class ScaleGateway(FakeGateway):
+        async def resolve_username(self, username):
+            self.resolve_calls += 1
+            n = int(username.rsplit("_", 1)[1])
+            return ResolvedUser(10000 + n, 20000 + n, username)
+
+    gateway = ScaleGateway()
+    settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
+    engine = CampaignEngine(settings)
+    total = 0
+    for _ in range(17):
+        result = await engine.run(db, campaign, gateway, requested_live=False, limit=100)
+        total += result["processed"]
+    rows = list(db.scalars(select(CampaignMember)).all())
+    assert total == 1700
+    assert len(rows) == 1700
+    assert all(row.status == MemberStatus.READY_DIRECT_INVITE.value for row in rows)
+    assert gateway.invite_calls == 0
+    final = await engine.run(db, campaign, gateway, requested_live=False, limit=100)
+    assert final["processed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_transient_failure_stops_after_three_attempts(db):
+    campaign = create_campaign(db, "bounded", "@target")
+    add_usernames(db, campaign, ["ready_user"])
+    gateway = ExplodingResolveGateway()
+    settings = Settings(_env_file=None, dry_run=True, admin_api_key="x" * 40)
+    engine = CampaignEngine(settings)
+    for _ in range(3):
+        result = await engine.run(db, campaign, gateway, requested_live=False, limit=1)
+        assert result["processed"] == 1
+    fourth = await engine.run(db, campaign, gateway, requested_live=False, limit=1)
+    row = db.scalar(select(CampaignMember))
+    assert row.attempts == 3
+    assert fourth["processed"] == 0
+
+
+@pytest.mark.asyncio
+async def test_invite_timeout_confirms_membership_before_retry(db, monkeypatch):
+    campaign = create_campaign(db, "ambiguous", "@target")
+    campaign.live_enabled = True
+    add_usernames(db, campaign, ["ready_user"])
+    db.commit()
+    gateway = FakeGateway()
+    settings = Settings(_env_file=None, dry_run=False, admin_api_key="x" * 40)
+    real_wait_for = __import__("asyncio").wait_for
+    invite_timed_out = False
+
+    async def timeout_invite_only(awaitable, timeout):
+        nonlocal invite_timed_out
+        if getattr(awaitable, "cr_code", None) and awaitable.cr_code.co_name == "invite" and not invite_timed_out:
+            invite_timed_out = True
+            awaitable.close()
+            gateway.members.add("ready_user")
+            raise TimeoutError
+        return await real_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr("app.campaign_engine.asyncio.wait_for", timeout_invite_only)
+    await CampaignEngine(settings).run(db, campaign, gateway, requested_live=True, limit=1)
+    row = db.scalar(select(CampaignMember))
+    assert row.status == MemberStatus.DIRECT_INVITED.value
+    assert "membership was confirmed" in row.detail
