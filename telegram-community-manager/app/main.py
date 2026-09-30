@@ -15,7 +15,7 @@ from .db import get_db, init_db
 from .importers import _dedupe, load_members, load_usernames
 from .logging_config import get_logger
 from .github_publish import public_codespace_url, publish_codespace_port
-from .models import CampaignRun, CampaignStatus, MemberStatus
+from .models import Campaign, CampaignRun, CampaignStatus, MemberStatus
 from .repository import (
     add_usernames,
     add_member_mappings,
@@ -114,7 +114,7 @@ async def lifespan(_: FastAPI):
     from .db import SessionLocal
     db = SessionLocal()
     try:
-        stale = db.query(__import__("app.models", fromlist=["Campaign"]).Campaign).filter_by(status=CampaignStatus.RUNNING.value).all()
+        stale = db.query(Campaign).filter_by(status=CampaignStatus.RUNNING.value).all()
         for campaign in stale:
             campaign.status = CampaignStatus.READY.value
             campaign.last_error = "Recovered after server restart; resume from persisted member checkpoints."
