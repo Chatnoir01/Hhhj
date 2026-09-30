@@ -137,8 +137,18 @@ class CampaignEngine:
             try:
                 result = await asyncio.wait_for(gateway.invite(resolved), timeout=30)
             except TimeoutError:
-                member.status = MemberStatus.FAILED_TEMPORARY.value
-                member.detail = "invite request timed out; outcome not confirmed"
+                # The request may have reached Telegram even when our response timed
+                # out. Re-check membership before ever allowing another invite.
+                try:
+                    if await asyncio.wait_for(gateway.is_member(resolved), timeout=30):
+                        member.status = MemberStatus.DIRECT_INVITED.value
+                        member.detail = "invite timed out, but membership was confirmed"
+                    else:
+                        member.status = MemberStatus.FAILED_TEMPORARY.value
+                        member.detail = "invite timed out; membership recheck says not joined"
+                except Exception as exc:
+                    member.status = MemberStatus.FAILED_FINAL.value
+                    member.detail = f"invite outcome ambiguous; manual review required: {type(exc).__name__}"
                 db.commit()
                 continue
             except Exception as exc:
