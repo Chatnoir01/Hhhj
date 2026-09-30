@@ -92,8 +92,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     <section class="card">
       <h2>5. Analyser la campagne</h2>
       <p class="muted">Le dry-run résout et classe les comptes sans envoyer d'invitation.</p>
-      <button id="dryRunBtn" onclick="runDry()">Lancer un batch dry-run</button>
-      <p class="muted">Chaque appui analyse le prochain lot de 100 comptes. Les comptes déjà classés ne sont plus retraités en dry-run.</p>
+      <button id="dryRunBtn" onclick="runDry()">Analyser toute la campagne automatiquement</button>
+      <p class="muted">Un seul appui lance tous les lots côté serveur. Tu peux fermer Safari : chaque membre est enregistré au fur et à mesure et la reprise reste possible.</p>
       <div id="dryStatus" class="status muted">Prêt — aucun batch lancé</div>
       <button class="secondary" onclick="inviteLink()">Créer le lien d'invitation fallback</button>
     </section>
@@ -299,12 +299,12 @@ async function runDry(){
   let campaignId;
   try{campaignId=cid()}catch(e){output({ok:false,error:e.message});status.textContent=e.message;status.className="status bad";return}
   btn.disabled=true; btn.classList.add("busy");
-  status.textContent="Dry-run lancé côté serveur…"; status.className="status warn";
+  status.textContent="Analyse automatique lancée côté serveur…"; status.className="status warn";
   try{
     const started=await request("/campaigns/"+campaignId+"/run-async","POST",{live:false,limit:100});
     if(started.already_running){status.textContent="Traitement déjà en cours — suivi de la progression persistante…";}
     let failures=0;
-    for(let attempt=0;attempt<180;attempt++){
+    for(let attempt=0;attempt<900;attempt++){
       await new Promise(resolve=>setTimeout(resolve,2000));
       try{
         const progress=await request("/campaigns/"+campaignId+"/progress");
@@ -313,7 +313,7 @@ async function runDry(){
         status.className="status warn";
         if(progress.status!=="RUNNING"){
           output({action:"dry_run",...progress});
-          status.textContent="Lot terminé — "+progress.attempted+"/"+progress.total+" vérifiés";
+          status.textContent="Analyse automatique arrêtée — "+progress.attempted+"/"+progress.total+" vérifiés";
           status.className=progress.status==="FAILED"?"status bad":"status ok";
           return;
         }
