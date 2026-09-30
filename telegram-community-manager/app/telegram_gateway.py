@@ -60,6 +60,8 @@ class TelegramGateway:
 
     async def preflight(self, target_group: str) -> PreflightResult:
         try:
+            # Participant caches are target-specific. Never reuse one across targets.
+            self._chat_participant_ids = None
             self.target = await self.client.get_entity(target_group)
             title = getattr(self.target, "title", str(target_group))
             can_invite = True
@@ -174,8 +176,11 @@ class TelegramGateway:
                 "UserChannelsTooMuchError": "TOO_MANY_CHANNELS",
                 "UserDeactivatedError": "DELETED_ACCOUNT",
                 "UserDeactivatedBanError": "DELETED_ACCOUNT",
-                "PeerFloodError": "FLOOD_WAIT",
             }
+            if name == "PeerFloodError":
+                # Telegram supplies no safe retry duration for PeerFlood. Stop the
+                # campaign without inventing a delay or automatically bypassing it.
+                return InviteResult("FLOOD_WAIT", "PeerFloodError: manual retry only", None)
             return InviteResult(mapping.get(name, "FAILED_TEMPORARY"), name)
 
     async def export_invite_link(self) -> str:
