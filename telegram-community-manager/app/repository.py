@@ -148,6 +148,10 @@ def has_unfinished_members(db: Session, campaign_id: int) -> bool:
         .where(
             CampaignMember.campaign_id == campaign_id,
             CampaignMember.status.in_(unfinished),
+            or_(
+                CampaignMember.status != MemberStatus.FAILED_TEMPORARY.value,
+                CampaignMember.attempts < 3,
+            ),
         )
         .limit(1)
     )
