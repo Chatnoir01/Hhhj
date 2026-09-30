@@ -78,10 +78,43 @@ async def _run_campaign_job(job_id: str, campaign_id: int, token: str, live: boo
             if not await gateway.connect_authorized():
                 raise RuntimeError("Telegram session is not authorized")
             engine = CampaignEngine(settings)
-            job["result"] = await engine.run(
-                db, campaign, gateway, requested_live=live,
-                limit=min(limit, settings.max_batch_size),
-            )
+            batch_limit = min(limit, settings.max_batch_size)
+            total_processed = 0
+            batches = 0
+            last_result = None
+
+            # A single browser action processes the complete dry-run queue. Each
+            # member is checkpointed by CampaignEngine, so closing Safari does not
+            # stop the server-side job and a restart can safely resume it.
+            while True:
+                last_result = await engine.run(
+                    db, campaign, gateway, requested_live=live, limit=batch_limit
+                )
+                batches += 1
+                total_processed += int(last_result.get("processed", 0))
+
+                # Live mode deliberately remains one bounded batch per explicit
+                # launch. We do not silently turn one click into unbounded invites.
+                if live:
+                    break
+                if not last_result.get("ok", False):
+                    break
+                if int(last_result.get("processed", 0)) == 0:
+                    break
+                if campaign.status in {
+                    CampaignStatus.FLOOD_WAIT.value,
+                    CampaignStatus.FAILED.value,
+                    CampaignStatus.PAUSED.value,
+                }:
+                    break
+                await asyncio.sleep(0)
+
+            job["result"] = {
+                **(last_result or {}),
+                "automatic": not live,
+                "batches": batches,
+                "total_processed": total_processed,
+            }
             job["status"] = "completed"
             if run_record is not None:
                 run_record.status = "completed"
