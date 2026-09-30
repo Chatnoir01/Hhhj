@@ -268,7 +268,10 @@ async function listCampaigns(){
   const d=await request("/campaigns");
   if(d.campaigns && d.campaigns.length){
     const current=document.getElementById("campaignId").value.trim();
-    if(!current) document.getElementById("campaignId").value=d.campaigns[0].id;
+    if(!current){
+      const preferred=d.campaigns.find(c=>Number(c.member_count)>0);
+      if(preferred) document.getElementById("campaignId").value=preferred.id;
+    }
   }
   return d;
 }
