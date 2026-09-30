@@ -102,12 +102,15 @@ def pending_members(
         MemberStatus.RESOLVED.value,
         MemberStatus.FAILED_TEMPORARY.value,
     ]
+    # Bound transient retries so one permanently failing account cannot loop forever.
+    max_attempts = 3
     if include_ready_direct_invite:
         immediately_resumable.append(MemberStatus.READY_DIRECT_INVITE.value)
     stmt = (
         select(CampaignMember)
         .where(
             CampaignMember.campaign_id == campaign_id,
+            CampaignMember.attempts < max_attempts,
             or_(
                 CampaignMember.status.in_(immediately_resumable),
                 and_(
