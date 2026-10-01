@@ -158,6 +158,30 @@ def has_unfinished_members(db: Session, campaign_id: int) -> bool:
     return db.scalar(stmt) is not None
 
 
+def active_flood_wait(db: Session, campaign_id: int) -> CampaignMember | None:
+    """Return a flood lock that must block live invitations.
+
+    A dated FloodWait remains active until Telegram's exact retry time. A
+    duration-less FloodWait (for example PeerFlood) requires manual review and
+    is therefore always considered active.
+    """
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(CampaignMember)
+        .where(
+            CampaignMember.campaign_id == campaign_id,
+            CampaignMember.status == MemberStatus.FLOOD_WAIT.value,
+            or_(
+                CampaignMember.retry_after.is_(None),
+                CampaignMember.retry_after > now,
+            ),
+        )
+        .order_by(CampaignMember.id.asc())
+        .limit(1)
+    )
+    return db.scalar(stmt)
+
+
 def has_flood_wait_members(db: Session, campaign_id: int) -> bool:
     stmt = (
         select(CampaignMember.id)
