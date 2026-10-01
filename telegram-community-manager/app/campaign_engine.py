@@ -1,0 +1,220 @@
+import asyncio
+from dataclasses import asdict
+
+from sqlalchemy.orm import Session
+
+from .config import Settings
+from .models import Campaign, CampaignStatus, MemberStatus
+from .repository import (
+    active_flood_wait,
+    campaign_stats,
+    duplicate_telegram_identity,
+    has_flood_wait_members,
+    has_unfinished_members,
+    pending_members,
+)
+from .telegram_gateway import ResolvedUser
+
+
+class CampaignEngine:
+    def __init__(self, settings: Settings):
+        self.settings = settings
+
+    async def run(
+        self,
+        db: Session,
+        campaign: Campaign,
+        gateway,
+        *,
+        requested_live: bool = False,
+        limit: int = 25,
+    ) -> dict:
+        effective_live = requested_live and campaign.live_enabled and not self.settings.dry_run
+
+        # Never send another live invite while Telegram has an active flood
+        # restriction. We obey Telegram's timestamp exactly and never invent a
+        # retry time for duration-less PeerFlood restrictions.
+        if effective_live:
+            flood_lock = active_flood_wait(db, campaign.id)
+            if flood_lock is not None:
+                campaign.status = CampaignStatus.FLOOD_WAIT.value
+                campaign.last_error = flood_lock.detail or "Telegram flood restriction is active"
+                db.commit()
+                return {
+                    "ok": True,
+                    "live": True,
+                    "processed": 0,
+                    "blocked_by_flood_wait": True,
+                    "retry_after": flood_lock.retry_after,
+                    "campaign_status": campaign.status,
+                    "stats": campaign_stats(db, campaign.id),
+                }
+
+        def transient_failure(member, detail: str) -> None:
+            # The current attempt has already been counted. After three failed
+            # attempts the row becomes terminal instead of looking retryable forever.
+            member.status = (
+                MemberStatus.FAILED_FINAL.value
+                if member.attempts >= 3
+                else MemberStatus.FAILED_TEMPORARY.value
+            )
+            member.detail = detail
+            member.retry_after = None
+            db.commit()
+
+        try:
+            preflight = await asyncio.wait_for(gateway.preflight(campaign.target_group), timeout=30)
+        except TimeoutError:
+            campaign.status = CampaignStatus.FAILED.value
+            campaign.last_error = "Telegram preflight timed out"
+            db.commit()
+            return {"ok": False, "live": effective_live, "detail": campaign.last_error, "stats": campaign_stats(db, campaign.id)}
+        if not preflight.ok:
+            campaign.status = CampaignStatus.FAILED.value
+            campaign.last_error = preflight.detail
+            db.commit()
+            return {
+                "ok": False,
+                "live": effective_live,
+                "preflight": asdict(preflight),
+                "stats": campaign_stats(db, campaign.id),
+            }
+
+        campaign.status = CampaignStatus.RUNNING.value
+        campaign.last_error = None
+        db.commit()
+
+        processed = 0
+        stopped_on_flood_wait = False
+
+        for member in pending_members(
+            db,
+            campaign.id,
+            max(1, min(limit, 100)),
+            include_ready_direct_invite=effective_live,
+        ):
+            processed += 1
+            member.attempts += 1
+
+            if member.telegram_user_id and member.access_hash:
+                resolved = ResolvedUser(
+                    user_id=member.telegram_user_id,
+                    access_hash=member.access_hash,
+                    username=member.username,
+                )
+            else:
+                try:
+                    resolved = await asyncio.wait_for(gateway.resolve_username(member.username), timeout=30)
+                except TimeoutError:
+                    transient_failure(member, "username resolution timed out")
+                    continue
+                except Exception as exc:
+                    transient_failure(member, f"username resolution: {type(exc).__name__}")
+                    continue
+                if resolved is None:
+                    member.status = MemberStatus.INVALID.value
+                    member.detail = "username could not be resolved"
+                    db.commit()
+                    continue
+
+                member.telegram_user_id = resolved.user_id
+                member.access_hash = resolved.access_hash
+                member.status = MemberStatus.RESOLVED.value
+                member.detail = None
+
+                duplicate = duplicate_telegram_identity(
+                    db, campaign.id, member.id, resolved.user_id
+                )
+                if duplicate is not None:
+                    member.status = MemberStatus.DUPLICATE_ID.value
+                    member.detail = f"same Telegram user as member #{duplicate.id}"
+                    db.commit()
+                    continue
+
+                if resolved.deleted:
+                    member.status = MemberStatus.DELETED_ACCOUNT.value
+                    member.detail = "deleted Telegram account"
+                    db.commit()
+                    continue
+                if resolved.is_bot:
+                    member.status = MemberStatus.BOT_ACCOUNT.value
+                    member.detail = "bot accounts are not migrated"
+                    db.commit()
+                    continue
+                db.commit()
+
+            try:
+                if await asyncio.wait_for(gateway.is_member(resolved), timeout=30):
+                    member.status = MemberStatus.ALREADY_MEMBER.value
+                    member.detail = None
+                    db.commit()
+                    continue
+            except Exception as exc:
+                transient_failure(member, f"membership check: {type(exc).__name__}")
+                continue
+
+            if not effective_live:
+                member.status = MemberStatus.READY_DIRECT_INVITE.value
+                member.detail = "dry-run: eligible for a direct invite attempt"
+                member.retry_after = None
+                db.commit()
+                continue
+
+            try:
+                result = await asyncio.wait_for(gateway.invite(resolved), timeout=30)
+            except TimeoutError:
+                # The request may have reached Telegram even when our response timed
+                # out. Re-check membership before ever allowing another invite.
+                try:
+                    if await asyncio.wait_for(gateway.is_member(resolved), timeout=30):
+                        member.status = MemberStatus.DIRECT_INVITED.value
+                        member.detail = "invite timed out, but membership was confirmed"
+                    else:
+                        transient_failure(member, "invite timed out; membership recheck says not joined")
+                        continue
+                except Exception as exc:
+                    member.status = MemberStatus.FAILED_FINAL.value
+                    member.detail = f"invite outcome ambiguous; manual review required: {type(exc).__name__}"
+                db.commit()
+                continue
+            except Exception as exc:
+                transient_failure(member, f"invite request: {type(exc).__name__}")
+                continue
+            member.status = result.status
+            member.detail = result.detail
+            member.retry_after = result.retry_after
+            db.commit()
+
+            if result.status == MemberStatus.FLOOD_WAIT.value:
+                campaign.status = CampaignStatus.FLOOD_WAIT.value
+                campaign.last_error = result.detail
+                db.commit()
+                stopped_on_flood_wait = True
+                break
+
+        if not stopped_on_flood_wait:
+            if has_flood_wait_members(db, campaign.id):
+                campaign.status = CampaignStatus.FLOOD_WAIT.value
+            elif has_unfinished_members(db, campaign.id):
+                campaign.status = CampaignStatus.READY.value
+            elif effective_live:
+                campaign.status = CampaignStatus.COMPLETED.value
+            else:
+                campaign.status = CampaignStatus.READY.value
+            db.commit()
+
+        stats = campaign_stats(db, campaign.id)
+        return {
+            "ok": True,
+            "live": effective_live,
+            "processed": processed,
+            "empty_queue": processed == 0,
+            "detail": (
+                "No processable members in this campaign. Check the campaign ID and import stats."
+                if processed == 0 and not stats
+                else None
+            ),
+            "preflight": asdict(preflight),
+            "campaign_status": campaign.status,
+            "stats": stats,
+        }
