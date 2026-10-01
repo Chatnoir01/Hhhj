@@ -350,6 +350,7 @@ async def test_transient_failure_stops_after_three_attempts(db):
     fourth = await engine.run(db, campaign, gateway, requested_live=False, limit=1)
     row = db.scalar(select(CampaignMember))
     assert row.attempts == 3
+    assert row.status == MemberStatus.FAILED_FINAL.value
     assert fourth["processed"] == 0
 
 
