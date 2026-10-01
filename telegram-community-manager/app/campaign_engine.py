@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from .config import Settings
 from .models import Campaign, CampaignStatus, MemberStatus
 from .repository import (
+    active_flood_wait,
     campaign_stats,
     duplicate_telegram_identity,
     has_flood_wait_members,
@@ -29,6 +30,25 @@ class CampaignEngine:
         limit: int = 25,
     ) -> dict:
         effective_live = requested_live and campaign.live_enabled and not self.settings.dry_run
+
+        # Never send another live invite while Telegram has an active flood
+        # restriction. We obey Telegram's timestamp exactly and never invent a
+        # retry time for duration-less PeerFlood restrictions.
+        if effective_live:
+            flood_lock = active_flood_wait(db, campaign.id)
+            if flood_lock is not None:
+                campaign.status = CampaignStatus.FLOOD_WAIT.value
+                campaign.last_error = flood_lock.detail or "Telegram flood restriction is active"
+                db.commit()
+                return {
+                    "ok": True,
+                    "live": True,
+                    "processed": 0,
+                    "blocked_by_flood_wait": True,
+                    "retry_after": flood_lock.retry_after,
+                    "campaign_status": campaign.status,
+                    "stats": campaign_stats(db, campaign.id),
+                }
 
         def transient_failure(member, detail: str) -> None:
             # The current attempt has already been counted. After three failed
