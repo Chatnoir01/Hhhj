@@ -30,6 +30,18 @@ class CampaignEngine:
     ) -> dict:
         effective_live = requested_live and campaign.live_enabled and not self.settings.dry_run
 
+        def transient_failure(member, detail: str) -> None:
+            # The current attempt has already been counted. After three failed
+            # attempts the row becomes terminal instead of looking retryable forever.
+            member.status = (
+                MemberStatus.FAILED_FINAL.value
+                if member.attempts >= 3
+                else MemberStatus.FAILED_TEMPORARY.value
+            )
+            member.detail = detail
+            member.retry_after = None
+            db.commit()
+
         try:
             preflight = await asyncio.wait_for(gateway.preflight(campaign.target_group), timeout=30)
         except TimeoutError:
@@ -74,14 +86,10 @@ class CampaignEngine:
                 try:
                     resolved = await asyncio.wait_for(gateway.resolve_username(member.username), timeout=30)
                 except TimeoutError:
-                    member.status = MemberStatus.FAILED_TEMPORARY.value
-                    member.detail = "username resolution timed out"
-                    db.commit()
+                    transient_failure(member, "username resolution timed out")
                     continue
                 except Exception as exc:
-                    member.status = MemberStatus.FAILED_TEMPORARY.value
-                    member.detail = f"username resolution: {type(exc).__name__}"
-                    db.commit()
+                    transient_failure(member, f"username resolution: {type(exc).__name__}")
                     continue
                 if resolved is None:
                     member.status = MemberStatus.INVALID.value
@@ -122,9 +130,7 @@ class CampaignEngine:
                     db.commit()
                     continue
             except Exception as exc:
-                member.status = MemberStatus.FAILED_TEMPORARY.value
-                member.detail = f"membership check: {type(exc).__name__}"
-                db.commit()
+                transient_failure(member, f"membership check: {type(exc).__name__}")
                 continue
 
             if not effective_live:
@@ -144,17 +150,15 @@ class CampaignEngine:
                         member.status = MemberStatus.DIRECT_INVITED.value
                         member.detail = "invite timed out, but membership was confirmed"
                     else:
-                        member.status = MemberStatus.FAILED_TEMPORARY.value
-                        member.detail = "invite timed out; membership recheck says not joined"
+                        transient_failure(member, "invite timed out; membership recheck says not joined")
+                        continue
                 except Exception as exc:
                     member.status = MemberStatus.FAILED_FINAL.value
                     member.detail = f"invite outcome ambiguous; manual review required: {type(exc).__name__}"
                 db.commit()
                 continue
             except Exception as exc:
-                member.status = MemberStatus.FAILED_TEMPORARY.value
-                member.detail = f"invite request: {type(exc).__name__}"
-                db.commit()
+                transient_failure(member, f"invite request: {type(exc).__name__}")
                 continue
             member.status = result.status
             member.detail = result.detail
