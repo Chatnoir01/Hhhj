@@ -201,6 +201,55 @@ async def test_flood_wait_is_persisted_and_stops_batch(db):
 
 
 @pytest.mark.asyncio
+async def test_active_flood_wait_blocks_live_rerun_before_any_invite(db):
+    from datetime import timedelta
+
+    campaign = create_campaign(db, "flood-lock", "@target")
+    campaign.live_enabled = True
+    add_usernames(db, campaign, ["flood_user", "ready_user"])
+    rows = list(db.scalars(select(CampaignMember).order_by(CampaignMember.id)).all())
+    rows[0].status = MemberStatus.FLOOD_WAIT.value
+    rows[0].detail = "FloodWait"
+    rows[0].retry_after = datetime.now(timezone.utc) + timedelta(minutes=5)
+    db.commit()
+
+    gateway = FakeGateway()
+    settings = Settings(_env_file=None, dry_run=False, admin_api_key="x" * 40)
+    result = await CampaignEngine(settings).run(
+        db, campaign, gateway, requested_live=True, limit=100
+    )
+
+    assert result["blocked_by_flood_wait"] is True
+    assert result["processed"] == 0
+    assert result["campaign_status"] == "FLOOD_WAIT"
+    assert gateway.resolve_calls == 0
+    assert gateway.invite_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_durationless_peer_flood_requires_manual_review(db):
+    campaign = create_campaign(db, "peer-flood-lock", "@target")
+    campaign.live_enabled = True
+    add_usernames(db, campaign, ["flood_user", "ready_user"])
+    rows = list(db.scalars(select(CampaignMember).order_by(CampaignMember.id)).all())
+    rows[0].status = MemberStatus.FLOOD_WAIT.value
+    rows[0].detail = "PeerFloodError: manual retry only"
+    rows[0].retry_after = None
+    db.commit()
+
+    gateway = FakeGateway()
+    settings = Settings(_env_file=None, dry_run=False, admin_api_key="x" * 40)
+    result = await CampaignEngine(settings).run(
+        db, campaign, gateway, requested_live=True, limit=100
+    )
+
+    assert result["blocked_by_flood_wait"] is True
+    assert result["processed"] == 0
+    assert gateway.resolve_calls == 0
+    assert gateway.invite_calls == 0
+
+
+@pytest.mark.asyncio
 async def test_repeated_dry_run_advances_to_next_batch(db):
     campaign = create_campaign(db, "advance", "@target")
     add_usernames(db, campaign, ["ready_user", "privacy_user"])
